@@ -1,0 +1,43 @@
+name: Build Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Draft release tag
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: node --test scripts/test-extract-archive.mjs
+      - run: npm run fetch:ffmpeg
+      - run: npm run test:core
+      - run: npm run test:desktop
+      - run: npm run build:slim
+      - name: Upload Windows portable to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          GH_REPO: ${{ github.repository }}
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem release-slim/*.exe)
+          if ($files.Count -ne 1) { throw 'Expected one portable executable' }
+          gh release upload $env:RELEASE_TAG $files[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
