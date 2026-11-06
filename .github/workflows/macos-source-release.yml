@@ -1,0 +1,33 @@
+name: Archive macOS FFmpeg source
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Archive matching source and notices
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir source
+          gh release download ffmpeg-9.0.2-1 --repo mrkbac/portable-ffmpeg --dir source --pattern ffmpeg-9.0.2-macos-sources.zip --pattern ffmpeg-9.0.2-macos-notices.zip --pattern ffmpeg-9.0.2-macos-source-lock.json
+          cd source
+          sha256sum -c <<'CHECKSUMS'
+          00583f1540ec1b415c7db16040e12ecdcb5a0d6f44a499ac0dd37135835d3f10  ffmpeg-9.0.2-macos-sources.zip
+          963b0ec72f3f8db9ea7a5588221ee78ab227e1c19b7255ec53dee497f8c55bff  ffmpeg-9.0.2-macos-notices.zip
+          7ffd161f6914fa4bc9ba13b08a44455ffe163e61b3772cd4f434b9587f31a022  ffmpeg-9.0.2-macos-source-lock.json
+          CHECKSUMS
+          gh release upload "$RELEASE_TAG" ./*
