@@ -26,18 +26,56 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
       - run: node --test scripts/test-extract-archive.mjs
-      - run: npm run fetch:ffmpeg
+      - name: Download pinned FFmpeg and notices
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release download ffmpeg-9.0.2-1 --repo mrkbac/portable-ffmpeg --pattern ffmpeg-9.0.2-windows-amd64.tar.xz --dir .cache
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $archive = '.cache/ffmpeg-9.0.2-windows-amd64.tar.xz'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne '0e9e40b1e0305c84904163de7215b9c879f9a6aa74196045a5060cd1ca093e73') { throw 'FFmpeg archive checksum mismatch' }
+          New-Item -ItemType Directory -Force bin/win-x64 | Out-Null
+          tar -xJf $archive -C bin/win-x64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash bin/win-x64/ffmpeg.exe -Algorithm SHA256).Hash.ToLower() -ne 'c930b63cb1ee8b7e2eaf9c15161160edd5c9acad34f0303b5855c8eb142a7e8d') { throw 'FFmpeg binary checksum mismatch' }
+          if ((Get-FileHash bin/win-x64/ffprobe.exe -Algorithm SHA256).Hash.ToLower() -ne '075848c1bbb8b4e2e0b0ecba06e8ad06c889a8902ed219d6a9f5758c417ca108') { throw 'ffprobe binary checksum mismatch' }
       - run: npm run test:core
       - run: npm run test:desktop
-      - run: npm run build:slim
-      - name: Upload Windows portable to draft release
+      - run: npm run build:win
+      - name: Upload Windows packages to draft release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           GH_REPO: ${{ github.repository }}
         shell: pwsh
         run: |
-          $files = @(Get-ChildItem release-slim/*.exe)
-          if ($files.Count -ne 1) { throw 'Expected one portable executable' }
-          gh release upload $env:RELEASE_TAG $files[0].FullName
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $files = @(Get-ChildItem release/*.exe)
+          if ($files.Count -ne 2) { throw 'Expected an installer and a portable executable' }
+          foreach ($file in $files) {
+            gh release upload $env:RELEASE_TAG $file.FullName
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+  ffmpeg-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preserve matching FFmpeg source and licenses
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir source
+          gh release download ffmpeg-9.0.2-1 --repo mrkbac/portable-ffmpeg --dir source --pattern 'ffmpeg-9.0.2-btbn-sources-*.zip' --pattern 'ffmpeg-9.0.2-btbn-rust-stdlib-crates.zip' --pattern 'ffmpeg-9.0.2-btbn-notices.zip' --pattern 'ffmpeg-9.0.2-btbn-source-lock.json' --pattern 'ffmpeg-9.0.2-btbn-RESTORE.md'
+          cd source
+          sha256sum -c <<'CHECKSUMS'
+          ccd17c8a3271da6936ecc4a6daf0d3546600467620248ddb42a1afbfb1027bb4  ffmpeg-9.0.2-btbn-sources-01.zip
+          bd73910da42cf3d82b3d98e906830804da70963af4e07e28f9aacacbff797937  ffmpeg-9.0.2-btbn-sources-02.zip
+          4cdc72650a24cce8ea8eb0947411259d96af403bda37c580296e1bf89ffa3c7e  ffmpeg-9.0.2-btbn-rust-stdlib-crates.zip
+          601385017d07a09ca6f9a64e39e8574fd0d6adc89a144ac85ef71f131a535226  ffmpeg-9.0.2-btbn-notices.zip
+          947aa68ce08e9dd719228f8bba3505d3f6198cfe370d0f5eff437dbc653dde54  ffmpeg-9.0.2-btbn-source-lock.json
+          2ed929bdfe05489823cd3b367a4c4286a173e73c25c8cc16d4a01cb607806b21  ffmpeg-9.0.2-btbn-RESTORE.md
+          CHECKSUMS
+          gh release upload "$RELEASE_TAG" ./*

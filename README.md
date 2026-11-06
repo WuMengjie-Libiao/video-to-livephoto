@@ -4,7 +4,7 @@
 
 ## 下载
 
-安装包见 [GitHub Releases](https://github.com/WuMengjie-Libiao/video-to-livephoto/releases)。Windows 精简版需要先安装 FFmpeg 和 ffprobe 并加入 PATH；Android 版支持 Android 10 及以上。不同品牌相册对动态照片的支持需要实际验证。
+安装包见 [GitHub Releases](https://github.com/WuMengjie-Libiao/video-to-livephoto/releases)。Windows 版内置视频处理组件；Android 版支持 Android 10 及以上。不同品牌相册对动态照片的支持需要实际验证。
 
 ## 使用方式
 
