@@ -88,7 +88,7 @@ try {
   assert.ok(fs.existsSync(result[0].path));
   process.lpResourcesDir = resources;
   const core = require('../electron/core');
-  const pair = core.preparePhoto(src, { duration: 1 });
+  const pair = await core.preparePhoto(src, { duration: 1 });
   try { assert.equal(pair.validated, true); }
   finally { fs.rmSync(pair.directory, { recursive: true, force: true }); }
   console.log('PACKAGED_OK: bundled FFmpeg/ffprobe/native helper executed; preview seek, staged poster/video, confirmed delivery and Apple validation passed');

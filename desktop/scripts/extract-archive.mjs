@@ -4,7 +4,9 @@ import fs from 'node:fs';
 export function extractArchive(zip, outDir) {
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });
-  if (process.platform === 'win32') {
+  if (zip.endsWith('.tar.xz')) {
+    execFileSync('tar',['-xf',zip,'-C',outDir],{stdio:'inherit'});
+  } else if (process.platform === 'win32') {
     execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
       'Expand-Archive -LiteralPath $env:LP_ARCHIVE_PATH -DestinationPath $env:LP_ARCHIVE_DEST -Force'], {
       stdio: 'inherit', env: { ...process.env, LP_ARCHIVE_PATH: zip, LP_ARCHIVE_DEST: outDir },

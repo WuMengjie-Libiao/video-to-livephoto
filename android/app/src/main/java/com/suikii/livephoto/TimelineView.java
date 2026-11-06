@@ -21,18 +21,21 @@ final class TimelineView extends View {
     private long duration = 1, start, end = 1, position;
     private int target;
     private float anchorX;
-    private long anchorTime;
+    private long anchorTime,anchorEnd,viewStart;
+    private boolean panning;
+    private long span(){return Math.min(40000,duration);}
     TimelineView(Context context) { super(context); density=getResources().getDisplayMetrics().density; setFocusable(true); }
     void setListener(Listener value) { listener=value; }
     void setFrames(List<Bitmap> value) { frames=value; invalidate(); }
     void setRange(long total, long from, long to, long current) {
+        if(!panning)viewStart=Math.max(0,Math.min(total-Math.min(40000,total),from-5000));
         duration=total; start=from; end=to; position=current;
         setContentDescription("视频时间线，选段 " + (from/1000.0) + " 到 " + (to/1000.0) + " 秒"); invalidate();
     }
     private float px(float dp) { return dp*density; }
     private float left() { return px(22); }
     private float width() { return Math.max(1,getWidth()-2*left()); }
-    private float x(long time) { return left()+width()*time/duration; }
+    private float x(long time) { return left()+width()*(time-viewStart)/span(); }
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         float top=px(12), bottom=px(64), width=width();
@@ -62,20 +65,21 @@ final class TimelineView extends View {
         if (listener==null || !isEnabled()) return false;
         if (event.getActionMasked()==MotionEvent.ACTION_DOWN) {
             float x=event.getX(), a=Math.abs(x-x(start)), b=Math.abs(x-x(end));
-            target=Math.min(a,b)<px(24) ? (a<=b ? 1 : 2) : 3;
-            anchorX=x; anchorTime=target==1?start:target==2?end:Math.round(Math.max(0,Math.min(1,(x-left())/width()))*duration);
+            target=Math.min(a,b)<px(24) ? (a<=b ? 1 : 2) : (x>x(start)&&x<x(end)?4:3); panning=true; anchorEnd=end;
+            anchorX=x; anchorTime=target==1||target==4?start:target==2?end:viewStart+Math.round(Math.max(0,Math.min(1,(x-left())/width()))*span());
             getParent().requestDisallowInterceptTouchEvent(true); return true;
         }
         if (event.getActionMasked()==MotionEvent.ACTION_MOVE || event.getActionMasked()==MotionEvent.ACTION_UP) {
-            long time=Math.max(0,Math.min(duration,anchorTime+Math.round((event.getX()-anchorX)/width()*duration)));
-            long min=Math.min(100,duration);
-            if (target==1) listener.onRange(Math.min(time,end-min),end);
-            else if (target==2) listener.onRange(start,Math.max(time,start+min));
+            long time=Math.max(0,Math.min(duration,anchorTime+Math.round((event.getX()-anchorX)/width()*span())));
+            long min=Math.min(MediaLimits.MIN_LENGTH,duration);
+            if (target==1) listener.onRange(Math.max(Math.max(0,end-MediaLimits.MAX_LENGTH),Math.min(time,end-min)),end);
+            else if (target==2) listener.onRange(start,Math.min(Math.min(duration,start+MediaLimits.MAX_LENGTH),Math.max(time,start+min)));
+            else if(target==4){long next=Math.max(0,Math.min(duration-(anchorEnd-anchorTime),time));listener.onRange(next,next+anchorEnd-anchorTime);}
             else listener.onPosition(time);
-            if (event.getActionMasked()==MotionEvent.ACTION_UP) { performClick(); getParent().requestDisallowInterceptTouchEvent(false); }
+            if (event.getActionMasked()==MotionEvent.ACTION_UP) { panning=false; performClick(); getParent().requestDisallowInterceptTouchEvent(false); }
             return true;
         }
-        if (event.getActionMasked()==MotionEvent.ACTION_CANCEL) { getParent().requestDisallowInterceptTouchEvent(false); return true; }
+        if (event.getActionMasked()==MotionEvent.ACTION_CANCEL) { panning=false; getParent().requestDisallowInterceptTouchEvent(false); return true; }
         return false;
     }
     @Override public boolean performClick() { super.performClick(); return true; }

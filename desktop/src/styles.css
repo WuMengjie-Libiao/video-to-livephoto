@@ -220,3 +220,8 @@ button:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px
 .aspectPicker { margin-left: auto; display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .aspectPicker select { background: transparent; border: 0; color: var(--text); padding: 8px 2px; }
 .coverButton { margin-left: 0; }
+
+.sourceOverview { display:flex; align-items:center; gap:12px; font-size:12px; color:var(--muted); margin-top:12px; }
+.sourceOverview input { flex:1; min-width:0; accent-color:var(--accent); }
+.trimSelection { cursor:grab; touch-action:none; }
+.importNotice { margin:4px 32px; font-size:12px; color:var(--muted); }

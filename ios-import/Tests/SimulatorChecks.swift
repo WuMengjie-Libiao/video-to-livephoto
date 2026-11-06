@@ -32,6 +32,30 @@ struct SimulatorChecks: App {
                 do { _ = try ClipSelection(duration: invalid) } catch { rejected = true }
                 try require(rejected, "非法时长被接受")
             }
+            var bounded = try ClipSelection(duration:3600)
+            bounded.setEnd(3600); try require(bounded.length==30,"选段最长30秒")
+            bounded.setCover(15); bounded.move(to:3500); try require(bounded.cover==3515,"选区整体移动保持封面偏移")
+            let large = documents.appendingPathComponent("too-large.mp4")
+            FileManager.default.createFile(atPath:large.path,contents:nil)
+            let largeHandle=try FileHandle(forWritingTo:large);try largeHandle.truncate(atOffset:UInt64(MediaLimits.inputBytes+1));try largeHandle.close()
+            do { _ = try await ImportedMovie.copy(large); throw Failure("超大素材未拒绝") }
+            catch { try require(error.localizedDescription.contains("1 GiB"),"超大素材应有准确错误") }
+            try FileManager.default.removeItem(at:large)
+            let longSource=Bundle.main.url(forResource:"fixture-long",withExtension:"mp4")!
+            let exportURL=documents.appendingPathComponent("cancel-before-start.mov")
+            let exporter=AVAssetExportSession(asset:AVURLAsset(url:longSource),presetName:AVAssetExportPreset1920x1080)!
+            exporter.outputURL=exportURL;exporter.outputFileType = .mov
+            let session=ExportOperation(exporter);session.cancel()
+            do{try await session.run();throw Failure("先取消后启动仍执行导出")}catch is CancellationError{}
+            let cancellation=Task { try await VideoConversion.prepare(longSource,clip:ClipSelection(duration:30),mute:false,aspect:.original) }
+            cancellation.cancel()
+            do { _ = try await cancellation.value; throw Failure("已取消任务仍生成成片") } catch is CancellationError { }
+            var longClip=try ClipSelection(duration:30);longClip.setEnd(30);longClip.setCover(15)
+            let interrupted=Task{try await VideoConversion.prepare(longSource,clip:longClip,mute:false,aspect:.original)}
+            try await Task.sleep(nanoseconds:100_000_000);interrupted.cancel()
+            do{_ = try await interrupted.value;throw Failure("生成中取消未生效")}catch is CancellationError{}
+            let thirty=try await VideoConversion.prepare(longSource,clip:longClip,mute:false,aspect:.original)
+            try require(abs(thirty.duration-30)<0.08,"30秒资源应完整生成")
             let source = Bundle.main.url(forResource: "fixture", withExtension: "mp4")!
             let permissions = PHPhotoLibrary.authorizationStatus(for: .addOnly)
             model.importFile(source)
@@ -58,6 +82,7 @@ struct SimulatorChecks: App {
             let image = CGImageSourceCreateWithURL(first.still as CFURL, nil)!
             let properties = CGImageSourceCopyPropertiesAtIndex(image, 0, nil)! as NSDictionary
             let size = (properties[kCGImagePropertyPixelWidth] as! Int, properties[kCGImagePropertyPixelHeight] as! Int)
+            try require(size.0 <= 240 && size.1 <= 320,"小素材不应放大")
             try require(size.1 > size.0 && abs(Double(size.0) / Double(size.1) - 0.75) < 0.02, "默认封面应保持旋转后的视频比例")
             record("checkpoint", "preview")
             while !FileManager.default.fileExists(atPath: documents.appendingPathComponent("continue-preview").path) { try await Task.sleep(nanoseconds: 100_000_000) }
@@ -94,7 +119,7 @@ struct SimulatorChecks: App {
             try await wait { !model.saving }
             try require(model.error == nil && model.notice != nil && model.prepared == nil, "保存完成后应关闭预览并提示成功")
             try require(try Data(contentsOf: second.movie) == before, "保存必须使用原预览成片")
-            record("result", "IPHONE_OK: video import, thumbnails, trim/cover, orientation, actual PHLivePhoto recognition, no preview permission, mute/audio, return/edit/regenerate and confirmed Photos write in isolated simulator")
+            record("result", "IPHONE_OK: 30-second output, pre-start/in-flight cancellation, oversized import rejection, video import, thumbnails, trim/cover, orientation, actual PHLivePhoto recognition, no preview permission, mute/audio, return/edit/regenerate and confirmed Photos write in isolated simulator")
         } catch { record("result", "FAILED: \(error.localizedDescription)") }
     }
 }

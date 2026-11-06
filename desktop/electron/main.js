@@ -13,8 +13,13 @@ const execAsync = promisify(execFile);
 const native = require('./native');
 if (app.isPackaged) process.lpResourcesDir = process.resourcesPath;
 let converting = false;
+const activeWorkers = new Set();
 const core = require('./core');
 const preview = require('./preview');
+const limits = require('./media-limits');
+const { run: runMedia, setGenerating, cancelError, shutdown } = require('./media-process');
+const tasks = new Map();
+const storage = require('./media-storage');
 
 const DEV = process.env.VITE_DEV === '1';
 let win = null;
@@ -45,32 +50,48 @@ function createWindow({ demo = false } = {}) {
 
 // ------------------------------------------------------------------ 工具函数
 
-function runWorker(command, src, opts) {
+function runWorker(command, src, opts, context = {}) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(path.join(__dirname, 'convert-worker.js'), {
-      workerData: { command, src, opts, resourcesPath: app.isPackaged ? process.resourcesPath : null },
+    const worker = new Worker(path.join(__dirname,'convert-worker.js'), {
+      workerData:{command,src,opts,workRoot:storage.root(),resourcesPath:app.isPackaged ? process.resourcesPath : null},
     });
+    activeWorkers.add(worker);
+    const cancel = () => worker.postMessage({type:'cancel'});
+    context.signal?.addEventListener('abort',cancel,{once:true});
+    if (context.signal?.aborted) cancel();
     let settled = false;
-    worker.on('message', message => {
+    worker.on('message',message => {
+      if (message.type === 'progress') { context.onProgress?.(message.progress); return; }
       settled = true;
-      if (message.type === 'error') reject(new Error(message.error));
+      if (message.type === 'cancelled') reject(cancelError());
+      else if (message.type === 'error') reject(new Error(message.error));
       else resolve(message.result);
     });
-    worker.on('error', reject);
-    worker.on('exit', code => {
+    worker.on('error',reject);
+    worker.on('exit',code => {
+      activeWorkers.delete(worker);
+      context.signal?.removeEventListener('abort',cancel);
       if (!settled) reject(new Error(`转换进程提前退出（${code}）`));
     });
   });
 }
-
-async function probeFile(p) {
+async function probeFile(p,signal) {
   try {
-    const info = await runWorker('probe', p);
-    if (!Number.isFinite(info.duration) || info.duration <= 0) throw new Error('无法确定视频时长，不能截取此素材');
-    return { path: p, name: path.basename(p), ok: true, ...info, previewUrl: preview.register(p, info.duration) };
-  } catch (e) {
-    return { path: p, name: path.basename(p), ok: false, error: e.message };
-  }
+    const info = await core.videoInfo(p,{background:true,signal});
+    return {path:p,name:path.basename(p),ok:true,...info,size:(await fs.promises.stat(p)).size};
+  } catch (error) { if (signal?.aborted) throw cancelError(); return {path:p,name:path.basename(p),ok:false,error:error.message}; }
+}
+
+async function probePaths(event,paths,taskId) {
+  if (typeof taskId !== 'string' || tasks.has(taskId)) throw new Error('任务标识无效');
+  const controller = new AbortController(), task={owner:event.sender,controller};
+  tasks.set(taskId,task);
+  const destroyed=()=>controller.abort();event.sender.once('destroyed',destroyed);
+  try {
+    const results=await Promise.allSettled(paths.map(p=>probeFile(p,controller.signal)));
+    controller.signal.throwIfAborted();
+    return results.map(result=>{if(result.status==='rejected')throw result.reason;const value=result.value;return value.ok?{...value,previewUrl:preview.register(value.path,value)}:value;});
+  } finally {tasks.delete(taskId);event.sender.removeListener('destroyed',destroyed);}
 }
 
 function defaultOutdir() {
@@ -99,11 +120,11 @@ ipcMain.handle('env:check', async () => {
   return {
     ok: !error, error, photosError,
     canSavePhotos: process.platform === 'darwin' && !photosError,
-    platform: process.platform, version: app.getVersion(), outdir: defaultOutdir(),
+    platform: process.platform, version: app.getVersion(), outdir: defaultOutdir(), limits: {defaultDuration:limits.defaultDuration,maxDuration:limits.maxDuration,minDuration:limits.minDuration},
   };
 });
 
-ipcMain.handle('video:pick', async () => {
+ipcMain.handle('video:pick', async (event,taskId) => {
   const r = await dialog.showOpenDialog(win, {
     title: '选择视频',
     properties: ['openFile', 'multiSelections'],
@@ -113,12 +134,13 @@ ipcMain.handle('video:pick', async () => {
     ],
   });
   if (r.canceled) return [];
-  return Promise.all(r.filePaths.map(probeFile));
+  return probePaths(event,r.filePaths,taskId);
 });
 
-ipcMain.handle('video:probe', (_e, paths) => Promise.all(paths.map(probeFile)));
-ipcMain.handle('video:frames', (_e, url) => preview.frames(url));
-ipcMain.handle('video:preview', (_e, url) => preview.transcode(url));
+ipcMain.handle('video:probe', (event,paths,taskId) => probePaths(event,paths,taskId));
+ipcMain.handle('video:frames', (_e,url,range) => preview.frames(url,range));
+ipcMain.handle('video:preview', (_e, url, range) => preview.transcode(url,range));
+ipcMain.handle('video:pause', (_e,url) => preview.pause(url));
 ipcMain.handle('video:release', (_e, url) => preview.release(url));
 
 // 生成缩略图（base64 data URL），给列表用
@@ -126,14 +148,7 @@ ipcMain.handle('video:thumb', async (_e, p) => {
   try {
     const ffmpeg = core.resolveBin('ffmpeg');
     if (!ffmpeg) return null;
-    const out = await new Promise((resolve, reject) => {
-      const proc = execFile(ffmpeg, [
-        '-v', 'error', '-ss', '0', '-i', p, '-frames:v', '1',
-        '-vf', 'scale=160:-2', '-q:v', '7', '-f', 'mjpeg', 'pipe:1',
-      ], { encoding: 'buffer', maxBuffer: 8 * 1024 * 1024, windowsHide: true },
-      (err, stdout) => (err ? reject(err) : resolve(stdout)));
-      proc.stdin?.end();
-    });
+    const {stdout:out} = await runMedia(ffmpeg,['-v','error','-ss','0','-i',p,'-frames:v','1','-vf','scale=160:-2','-q:v','7','-f','mjpeg','pipe:1'],{background:true,timeout:15000});
     return out && out.length ? `data:image/jpeg;base64,${out.toString('base64')}` : null;
   } catch {
     return null;
@@ -159,13 +174,13 @@ function batchFor(id, sender) {
   if (!batch || batch.owner !== sender) throw new Error('成片预览已失效，请重新预览');
   return batch;
 }
-function discardBatch(batch) {
+async function discardBatch(batch) {
   if (!batches.delete(batch.id)) return;
   batch.owner.removeListener('destroyed', batch.onDestroyed);
   for (const item of batch.items) {
     if (!item.ok) continue;
-    preview.release(item.videoUrl);
-    preview.release(item.stillUrl);
+    await preview.release(item.videoUrl);
+    await preview.release(item.stillUrl);
     fs.rmSync(item.prepared.directory, { recursive: true, force: true });
   }
 }
@@ -177,46 +192,62 @@ function validateJob(job) {
   if (job.destination === 'file' && (typeof job.outdir !== 'string' || !job.outdir)) throw new Error('请选择导出位置');
   if (job.destination === 'photos') native.needNative();
 }
+ipcMain.handle('delivery:cancel', (event,id) => {
+  const task = tasks.get(id);
+  if (!task) {
+    const batch=batches.get(id);
+    if (batch && batch.owner !== event.sender) throw new Error('任务不属于当前窗口');
+    if (batch?.state === 'saving') batch.cancelRequested=true;
+    return;
+  }
+  if (task.owner !== event.sender) throw new Error('任务不属于当前窗口');
+  task.controller.abort();
+});
 ipcMain.handle('delivery:prepare', async (event, job) => {
   if (converting) throw new Error('已有一批素材正在处理');
   validateJob(job);
+  if (typeof job.taskId !== 'string' || tasks.has(job.taskId)) throw new Error('任务标识无效');
+  const controller = new AbortController();
+  const task = {owner:event.sender,controller}; tasks.set(job.taskId,task);
   const batch = { id: randomUUID(), owner: event.sender, state: 'preparing',
     destination: job.destination, outdir: job.outdir, items: [], orphaned: false };
   batch.onDestroyed = () => {
-    batch.orphaned = true;
-    if (!['preparing', 'saving'].includes(batch.state)) discardBatch(batch);
+    batch.orphaned = true; batch.cancelRequested = true;
+    controller.abort();
+    if (!['preparing', 'saving'].includes(batch.state)) discardBatch(batch).catch(error=>console.error('成片清理失败',error));
   };
   event.sender.once('destroyed', batch.onDestroyed);
   batches.set(batch.id, batch);
-  converting = true;
+  converting = true; setGenerating(true);
   try {
-    for (const file of job.files) {
-      if (batch.orphaned) throw new Error('预览已关闭');
+    for (const [index,file] of job.files.entries()) {
+      controller.signal.throwIfAborted();
       try {
+        if (!event.sender.isDestroyed()) event.sender.send('convert:progress',{taskId:job.taskId,phase:'preparing',index,total:job.files.length,name:file.name});
         const prepared = await runWorker('prepare', file.path, {
           ...job.opts, start: file.clip.start, duration: file.clip.end - file.clip.start,
           cover: file.clip.cover, aspect: file.aspect ?? 'original', destination: job.destination,
-        });
+        }, {signal:controller.signal,onProgress:progress => { if (!event.sender.isDestroyed()) event.sender.send('convert:progress',{...progress,taskId:job.taskId,index,total:job.files.length,name:file.name}); }});
         batch.items.push({ name: file.name, ok: true, prepared,
           videoUrl: preview.registerAsset(prepared.video), stillUrl: preview.registerAsset(prepared.still) });
-      } catch (error) { batch.items.push({ name: file.name, ok: false, error: error.message }); }
+      } catch (error) { if (controller.signal.aborted) throw cancelError(); batch.items.push({ name: file.name, ok: false, error: error.message }); }
     }
-    if (batch.orphaned) throw new Error('预览已关闭');
+    controller.signal.throwIfAborted();
     batch.state = 'ready';
     return { id: batch.id, destination: batch.destination, items: batch.items.map(item => item.ok
       ? { name: item.name, ok: true, videoUrl: item.videoUrl, stillUrl: item.stillUrl,
         duration: item.prepared.duration, mute: item.prepared.mute }
       : item) };
   } catch (error) {
-    discardBatch(batch);
+    await discardBatch(batch);
     throw error;
-  } finally { converting = false; }
+  } finally { converting = false; setGenerating(false); tasks.delete(job.taskId); }
 });
-ipcMain.handle('delivery:release', (event, id) => {
+ipcMain.handle('delivery:release', async (event, id) => {
   if (!batches.has(id)) return;
   const batch = batchFor(id, event.sender);
   if (['preparing', 'saving'].includes(batch.state)) throw new Error('成片正在处理，请稍候');
-  discardBatch(batch);
+  await discardBatch(batch);
 });
 ipcMain.handle('delivery:save', async (event, id) => {
   if (converting) throw new Error('已有一批素材正在处理');
@@ -232,7 +263,8 @@ ipcMain.handle('delivery:save', async (event, id) => {
     for (const [index, item] of batch.items.entries()) {
       const progress = { index, total: batch.items.length, name: item.name };
       send({ ...progress, phase: 'start' });
-      if (!item.ok) results.push({ name: item.name, ok: false, error: item.error });
+      if (batch.cancelRequested) results.push({name:item.name,ok:false,cancelled:true});
+      else if (!item.ok) results.push({ name: item.name, ok: false, error: item.error });
       else {
         try {
           const saved = await runWorker('save', null, { prepared: item.prepared, outdir: batch.outdir });
@@ -245,17 +277,26 @@ ipcMain.handle('delivery:save', async (event, id) => {
   } finally {
     converting = false;
     batch.state = 'committed';
-    if (batch.orphaned) discardBatch(batch);
+    if (batch.orphaned) await discardBatch(batch);
   }
 });
 
 // ------------------------------------------------------------------ 启动
 
-app.on('will-quit', () => {
-  for (const batch of batches.values()) {
-    if (!['preparing', 'saving'].includes(batch.state)) discardBatch(batch);
-  }
-  preview.cleanup();
+let quitting = false, finishing = false;
+app.on('before-quit', event => {
+  if (quitting) return;
+  event.preventDefault();
+  if (finishing) return;
+  finishing = true;
+  for (const task of tasks.values()) task.controller.abort();
+  for (const batch of batches.values()) if (batch.state === 'saving') batch.cancelRequested = true;
+  (async () => {
+    await Promise.all([...activeWorkers].map(worker => new Promise(resolve => worker.once('exit',resolve))));
+    for (const batch of [...batches.values()]) await discardBatch(batch);
+    await preview.cleanup(); await shutdown(); await storage.cleanup();
+    quitting = true; app.quit();
+  })().catch(error => { console.error(error); quitting = true; app.quit(); });
 });
 app.whenReady().then(() => {
   preview.install();

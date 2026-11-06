@@ -96,27 +96,52 @@ func writeMovie(_ source: URL, _ destination: URL, identifier: String, stillTime
         throw writer.error ?? Failure("关键帧时间写入失败")
     }
     metadataInput.markAsFinished()
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    await withTaskCancellationHandler(operation: { await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
         let group = DispatchGroup()
         for (index, stream) in streams.enumerated() {
             TrackPump(stream.0, stream.1, group).start(index: index)
         }
         group.notify(queue: .global()) { continuation.resume() }
     }
+    }, onCancel: { reader.cancelReading() })
+    if Task.isCancelled { writer.cancelWriting(); throw CancellationError() }
     guard reader.status == .completed else { throw reader.error ?? writer.error ?? Failure("读取视频失败") }
     await writer.finishWriting()
     guard writer.status == .completed else { throw writer.error ?? Failure("视频封装失败") }
 }
 
-func loadLivePhoto(_ still: URL, _ movie: URL, targetSize: CGSize = CGSize(width: 200, height: 200)) async throws -> PHLivePhoto {
-    try await withCheckedThrowingContinuation { continuation in
-        PHLivePhoto.request(withResourceFileURLs: [still, movie], placeholderImage: nil,
-                            targetSize: targetSize, contentMode: .aspectFit) { photo, info in
+private final class LivePhotoRequest: @unchecked Sendable {
+    private let lock = NSLock()
+    private var id: PHLivePhotoRequestID?
+    private var continuation: CheckedContinuation<PHLivePhoto, Error>?
+    private var cancelled = false
+    func start(_ still: URL, _ movie: URL, _ target: CGSize, _ continuation: CheckedContinuation<PHLivePhoto, Error>) {
+        lock.lock()
+        if cancelled { lock.unlock(); continuation.resume(throwing: CancellationError()); return }
+        self.continuation = continuation; lock.unlock()
+        let request = PHLivePhoto.request(withResourceFileURLs:[still,movie],placeholderImage:nil,targetSize:target,contentMode:.aspectFit) { photo, info in
             if (info[PHLivePhotoInfoIsDegradedKey] as? Bool) == true { return }
-            if let photo { continuation.resume(returning: photo) }
-            else { continuation.resume(throwing: (info[PHLivePhotoInfoErrorKey] as? Error) ?? Failure("系统未识别出实况照片")) }
+            if let photo { self.finish(.success(photo)) }
+            else { self.finish(.failure((info[PHLivePhotoInfoErrorKey] as? Error) ?? Failure("系统未识别出实况照片"))) }
         }
+        lock.lock(); id = request; let shouldCancel = cancelled; lock.unlock()
+        if shouldCancel { PHLivePhoto.cancelRequest(withRequestID:request) }
     }
+    func finish(_ result: Result<PHLivePhoto,Error>) {
+        lock.lock(); let callback = continuation; continuation = nil; lock.unlock()
+        callback?.resume(with:result)
+    }
+    func cancel() {
+        lock.lock(); cancelled = true; let request = id; lock.unlock()
+        if let request { PHLivePhoto.cancelRequest(withRequestID:request) }
+        finish(.failure(CancellationError()))
+    }
+}
+func loadLivePhoto(_ still: URL, _ movie: URL, targetSize: CGSize = CGSize(width:200,height:200)) async throws -> PHLivePhoto {
+    let request = LivePhotoRequest()
+    return try await withTaskCancellationHandler(operation: {
+        try await withCheckedThrowingContinuation { request.start(still,movie,targetSize,$0) }
+    }, onCancel: { request.cancel() })
 }
 
 func validate(_ still: URL, _ movie: URL) async throws {

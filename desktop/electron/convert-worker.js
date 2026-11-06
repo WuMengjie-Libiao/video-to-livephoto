@@ -1,19 +1,17 @@
 'use strict';
 const { parentPort, workerData } = require('worker_threads');
-// Electron 的 resourcesPath 不是普通 Node worker 的契约，显式传入打包资源位置。
-if (workerData.resourcesPath) {
-  process.lpResourcesDir = workerData.resourcesPath;
-}
+if (workerData.resourcesPath) process.lpResourcesDir = workerData.resourcesPath;
+process.lpWorkRoot = workerData.workRoot;
 const core = require('./core');
-try {
-  let result;
-  switch (workerData.command) {
-    case 'probe': result = { ...core.videoInfo(workerData.src), size: require('fs').statSync(workerData.src).size }; break;
-    case 'prepare': result = core.prepareDelivery(workerData.src, workerData.opts); break;
-    case 'save': result = core.savePrepared(workerData.opts.prepared, workerData.opts.outdir); break;
-    default: throw new Error('未知的后台任务');
-  }
-  parentPort.postMessage({ type: 'result', result });
-} catch (error) {
-  parentPort.postMessage({ type: 'error', error: error.message || String(error) });
-}
+const controller = new AbortController();
+parentPort.on('message', message => { if (message.type === 'cancel') controller.abort(); });
+(async () => {
+  try {
+    const context = { signal: controller.signal, onProgress: progress => parentPort.postMessage({type:'progress',progress}) };
+    const result = workerData.command === 'prepare' ? await core.prepareDelivery(workerData.src,workerData.opts,context)
+      : workerData.command === 'save' ? await core.savePrepared(workerData.opts.prepared,workerData.opts.outdir)
+      : (() => { throw new Error('未知的后台任务'); })();
+    parentPort.postMessage({type:'result',result});
+  } catch (error) { parentPort.postMessage({type:controller.signal.aborted ? 'cancelled' : 'error',error:error.message}); }
+  finally { parentPort.close(); }
+})();

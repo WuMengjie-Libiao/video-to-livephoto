@@ -14,7 +14,7 @@
     "build:win": "vite build && electron-builder --win --config electron-builder.yml",
     "build:mac": "npm run build:native && vite build && electron-builder --mac --config electron-builder.yml",
     "build:slim": "vite build && electron-builder --win portable --config electron-builder.slim.yml",
-    "test:core": "node --test scripts/test-core.cjs",
+    "test:core": "node --test scripts/test-core.cjs scripts/test-media-limits.cjs",
     "icon": "python build/make-icon.py",
     "start": "npm run build:native && vite build && electron .",
     "build:native": "node scripts/build-native.mjs",

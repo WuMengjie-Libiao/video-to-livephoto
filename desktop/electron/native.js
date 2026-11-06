@@ -1,7 +1,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { run: runProcess } = require('./media-process');
 
 function needNative() {
   if (process.platform !== 'darwin') throw new Error('直接保存到照片需要 macOS');
@@ -10,13 +10,9 @@ function needNative() {
   if (!fs.existsSync(binary)) throw new Error('缺少照片组件，请运行 npm run build:native 或重新安装应用');
   return binary;
 }
-function runSync(args) {
-  let output;
-  try {
-    output = execFileSync(needNative(), args, { encoding: 'utf8', timeout: 180000, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1024 * 1024 });
-  } catch (error) {
-    throw new Error(error.code === 'ETIMEDOUT' ? '照片处理超时，请确认系统授权窗口后重试' : String(error.stderr || error.message).trim());
-  }
-  return JSON.parse(output);
+async function run(args, context = {}) {
+  const { stdout } = await runProcess(needNative(), args, { ...context,
+    onProgress:undefined, timeout: args[0] === 'import' ? 0 : 300000, maxBuffer: 1024 * 1024 });
+  return JSON.parse(stdout.toString());
 }
-module.exports = { needNative, runSync };
+module.exports = { needNative, run };

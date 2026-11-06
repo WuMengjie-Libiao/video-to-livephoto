@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-enum TimelineEdge { case start, end, playhead }
+enum TimelineEdge { case start, end, playhead, selection }
 
 struct TimelineView: UIViewRepresentable {
     let clip: ClipSelection
@@ -63,10 +63,14 @@ final class TimelineControl: UIView, UIGestureRecognizerDelegate {
         accessibilityElements = [startElement, positionElement, endElement]
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    private func x(_ time: Double) -> CGFloat { inset + CGFloat(time / (clip?.duration ?? 1)) * railWidth }
+    private var viewStart: Double = 0
+    private var panning = false
+    private var viewSpan: Double { min(40,clip?.duration ?? 1) }
+    private func x(_ time: Double) -> CGFloat { inset + CGFloat((time-viewStart)/viewSpan)*railWidth }
     override func layoutSubviews() {
         super.layoutSubviews()
         guard let clip else { return }
+        if !panning { viewStart = min(max(0,clip.start-5),max(0,clip.duration-viewSpan)) }
         let y: CGFloat = 14, h: CGFloat = 52
         strip.frame = CGRect(x: inset, y: y, width: railWidth, height: h)
         for (i, view) in strip.arrangedSubviews.enumerated() { (view as! UIImageView).image = i < images.count ? images[i] : nil }
@@ -90,9 +94,9 @@ final class TimelineControl: UIView, UIGestureRecognizerDelegate {
         return abs(translation.x) > abs(translation.y)
     }
     @objc private func tap(_ gesture: UITapGestureRecognizer) {
-        guard let clip else { return }
+        guard clip != nil else { return }
         let fraction = min(max(0, (gesture.location(in: self).x - inset) / railWidth), 1)
-        onChange?(.playhead, Double(fraction) * clip.duration)
+        onChange?(.playhead, viewStart + Double(fraction)*viewSpan)
     }
     @objc private func pan(_ gesture: UIPanGestureRecognizer) {
         guard let clip else { return }
@@ -100,13 +104,17 @@ final class TimelineControl: UIView, UIGestureRecognizerDelegate {
             let initialX = gesture.location(in: self).x - gesture.translation(in: self).x
             let a = abs(initialX - x(clip.start)), b = abs(initialX - x(clip.end))
             if min(a, b) < 24 { dragging = a <= b ? .start : .end }
+            else if initialX > x(clip.start), initialX < x(clip.end) { dragging = .selection }
             else { dragging = .playhead }
+            panning = true
             switch dragging { case .start: anchor = clip.start; case .end: anchor = clip.end
-            case .playhead: anchor = min(max(0, Double((initialX - inset) / railWidth)), 1) * clip.duration }
+            case .selection: anchor = clip.start
+            case .playhead: anchor = viewStart + min(max(0, Double((initialX - inset) / railWidth)), 1)*viewSpan }
         }
         if gesture.state == .began || gesture.state == .changed || gesture.state == .ended {
-            onChange?(dragging, anchor + Double(gesture.translation(in: self).x / railWidth) * clip.duration)
+            onChange?(dragging, anchor + Double(gesture.translation(in: self).x / railWidth) * viewSpan)
         }
+        if gesture.state == .ended || gesture.state == .cancelled { panning = false; setNeedsLayout() }
     }
 }
 
@@ -124,7 +132,7 @@ private final class TimelineAccessibility: UIAccessibilityElement {
     private func adjust(_ step: Double) {
         guard let control, let clip = control.clip else { return }
         let value: Double
-        switch edge { case .start: value = clip.start; case .end: value = clip.end; case .playhead: value = control.position }
+        switch edge { case .start: value = clip.start; case .end: value = clip.end; case .playhead: value = control.position; case .selection: value = clip.start }
         control.onChange?(edge, value + step)
     }
 }

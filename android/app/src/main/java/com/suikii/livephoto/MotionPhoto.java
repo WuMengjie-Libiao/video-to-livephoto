@@ -15,6 +15,10 @@ public final class MotionPhoto {
     private MotionPhoto() {}
 
     public static void write(File still, File video, File output, long coverTimeUs) throws IOException {
+        write(still,video,output,coverTimeUs,() -> {});
+    }
+    public static void write(File still, File video, File output, long coverTimeUs, Runnable check) throws IOException {
+        if(still.length()+video.length()>50L*1024*1024)throw new IOException("成片超过 50 MiB，请缩短片段");
         if (coverTimeUs < 0 || video.length() < 12) throw new IOException("无效的实况视频或封面时间");
         String xml = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
             + "<rdf:Description rdf:about=\"\" xmlns:GCamera=\"http://ns.google.com/photos/1.0/camera/\""
@@ -36,15 +40,15 @@ public final class MotionPhoto {
             if (movie.read(head) != head.length || head[4] != 'f' || head[5] != 't' || head[6] != 'y' || head[7] != 'p') throw new IOException("视频不是 MP4");
             result.writeShort(0xffd8); result.writeShort(0xffe1); result.writeShort(XMP.length + packet.length + 2);
             result.write(XMP); result.write(packet);
-            copy(image, result); result.write(head); copy(movie, result);
-        } catch (IOException error) {
+            copy(image, result,check); result.write(head); copy(movie, result,check);
+        } catch (IOException | RuntimeException error) {
             if (output.exists() && !output.delete()) error.addSuppressed(new IOException("无法删除未完成的实况照片"));
             throw error;
         }
     }
-    private static void copy(BufferedInputStream source, DataOutputStream destination) throws IOException {
+    private static void copy(BufferedInputStream source, DataOutputStream destination,Runnable check) throws IOException {
         byte[] buffer = new byte[65536];
         int n;
-        while ((n = source.read(buffer)) != -1) destination.write(buffer, 0, n);
+        while ((n = source.read(buffer)) != -1) {check.run();destination.write(buffer,0,n);}
     }
 }

@@ -24,6 +24,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
   const reviewRequest = useRef(null);
+  const importRequest = useRef(null);
   const validFiles = files.filter(f => f.ok);
   const activeFile = validFiles.find(f => f.path === activePath) || validFiles[0];
 
@@ -48,7 +49,7 @@ export default function App() {
       const unique = new Map(prev.map(f => [f.path, f]));
       items.forEach(f => {
         if (!unique.has(f.path)) unique.set(f.path, { ...f, aspect: 'original', clip: f.ok
-          ? { start: 0, end: Math.min(3, f.duration), cover: Math.min(3, f.duration) / 2 } : null });
+          ? { start: 0, end: Math.min(env.limits.defaultDuration,f.duration), cover: Math.min(env.limits.defaultDuration,f.duration)/2 } : null });
       });
       return [...unique.values()];
     });
@@ -56,30 +57,34 @@ export default function App() {
       const data = await window.api.thumb(f.path);
       if (data) setThumbs(prev => ({ ...prev, [f.path]: data }));
     });
-  }, []);
+  }, [env]);
   const pick = () => perform(async () => {
-    if (demo || running || loading) return;
-    setLoading(true);
-    try { addFiles(await window.api.pickVideos()); } finally { setLoading(false); }
+    if (!env || demo || running || loading || preparing || review) return;
+    const request={id:crypto.randomUUID(),cancelled:false};importRequest.current=request;setLoading(true);
+    try { const items=await window.api.pickVideos(request.id);if(!request.cancelled)addFiles(items); }
+    catch(e){if(!request.cancelled)throw e;}
+    finally {importRequest.current=null;setLoading(false);}
   });
   const drop = e => {
     e.preventDefault(); setDragging(false);
-    if (demo || running || loading) return;
+    if (!env || demo || running || loading || preparing || review) return;
     const paths = [...e.dataTransfer.files].map(window.api.pathForFile).filter(p => ACCEPT.test(p));
     if (!paths.length) { setError('请添加视频文件，例如 MP4、MOV 或 MKV。'); return; }
     perform(async () => {
-      setLoading(true);
-      try { addFiles(await window.api.probeVideos(paths)); } finally { setLoading(false); }
+      const request={id:crypto.randomUUID(),cancelled:false};importRequest.current=request;setLoading(true);
+      try {const items=await window.api.probeVideos(paths,request.id);if(!request.cancelled)addFiles(items);}
+      catch(e){if(!request.cancelled)throw e;}
+      finally{importRequest.current=null;setLoading(false);}
     });
   };
   const releaseReview = batch => window.api.releaseDelivery(batch.id).catch(e => setError(`预览清理失败：${e.message}`));
   const openReview = async () => {
     if (demo || running || preparing || !validFiles.length) return;
-    setError(''); setPreparing(true); setReview({ status: 'loading' });
-    const request = {};
+    setProgress(null); setError(''); setPreparing(true); setReview({ status: 'loading' });
+    const request = {taskId:crypto.randomUUID()};
     reviewRequest.current = request;
     try {
-      const batch = await window.api.prepareDelivery({ files: validFiles, opts, destination, outdir });
+      const batch = await window.api.prepareDelivery({ files: validFiles, opts, destination, outdir, taskId:request.taskId });
       if (reviewRequest.current !== request) await releaseReview(batch);
       else setReview({ status: 'ready', batch });
     } catch (e) {
@@ -88,6 +93,7 @@ export default function App() {
   };
   const closeReview = () => {
     if (running) return;
+    if (preparing && reviewRequest.current) window.api.cancelDelivery(reviewRequest.current.taskId).catch(e => setError(e.message));
     reviewRequest.current = null;
     if (review?.batch) releaseReview(review.batch);
     setReview(null);
@@ -120,6 +126,7 @@ export default function App() {
     onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragging(false); }} onDrop={drop}>
     <header className="titlebar">
       <div className="brand"><Icon name="live" size={24} /><h1>实况照片</h1></div>
+      {loading && <button className="textButton" onClick={()=>{const request=importRequest.current;if(request && !request.cancelled){request.cancelled=true;window.api.cancelDelivery(request.id).catch(e=>setError(e.message));}}}>取消读取</button>}
       <span className="localNote">{demo ? '演示预览' : '只在本机处理'}</span>
     </header>
     {(error || env?.error) && <div role="alert" className="banner">
@@ -129,14 +136,14 @@ export default function App() {
     <main className={`workspace ${files.length ? '' : 'workspaceEmpty'}`} aria-label="视频素材与结果">
       {files.length > 0 && <div className="workspaceTools">
         <span>{files.length > 1 ? `${files.length} 段视频` : '选一段喜欢的画面'}</span>
-        <div className="sectionActions"><button className="btn addButton" disabled={running || loading} onClick={pick}><Icon name="plus" size={15} />添加视频</button>
-          <button className="textButton" disabled={running || loading} onClick={clear}>清空</button>
+        <div className="sectionActions"><button className="btn addButton" disabled={running || loading || preparing} onClick={pick}><Icon name="plus" size={15} />添加视频</button>
+          <button className="textButton" disabled={running || loading || preparing} onClick={clear}>清空</button>
         </div>
       </div>}
-      {activeFile && <VideoEditor key={activeFile.path} file={activeFile} disabled={running || !!review} muted={opts.mute} aspect={activeFile.aspect}
+      {activeFile && <VideoEditor key={activeFile.path} file={activeFile} disabled={running || !!review} limits={env.limits} muted={opts.mute} aspect={activeFile.aspect}
         onAspectChange={aspect => setFiles(prev => prev.map(f => f.path === activeFile.path ? { ...f, aspect } : f))}
         onChange={clip => setFiles(prev => prev.map(f => f.path === activeFile.path ? { ...f, clip } : f))} />}
-      {!files.length ? <button className={`dropzone ${dragging ? 'dropzoneActive' : ''}`} onClick={pick} disabled={loading || running} aria-label="添加视频">
+      {!files.length ? <button className={`dropzone ${dragging ? 'dropzoneActive' : ''}`} onClick={pick} disabled={!env || loading || running} aria-label="添加视频">
         <span className="dropIcon"><Icon name="live" size={58} /></span>
         <span className="dropTitle">{loading ? '正在打开视频…' : '留住喜欢的那一刻'}</span>
         <span className="dropHint">拖入视频，选一小段，变成实况照片。</span>
@@ -148,19 +155,20 @@ export default function App() {
             <span className="thumb">{thumbs[f.path] && <img src={thumbs[f.path]} alt="" />}</span>
             <span className="fileMain"><span className="fileName" title={f.path}>{f.name}</span><span className="fileMeta">{f.ok ? fmtDur(f.clip.end - f.clip.start) : f.error}</span></span>
           </button>
-          <button className="iconBtn" aria-label={`移除 ${f.name}`} disabled={running} onClick={() => remove(f)}><Icon name="close" size={14} /></button>
+          <button className="iconBtn" aria-label={`移除 ${f.name}`} disabled={running || preparing} onClick={() => remove(f)}><Icon name="close" size={14} /></button>
         </li>)}
       </ul></div>}
       {results.length > 0 && <section className="resultsSection" aria-label="处理结果" aria-live="polite">
-        {results.map((r, i) => <div key={i} className={`resultRow ${r.ok ? '' : 'resultRowBad'}`}>
+        {results.map((r, i) => <div key={i} className={`resultRow ${r.ok || r.cancelled ? '' : 'resultRowBad'}`}>
           {r.ok && <Icon name="check" size={17} />}<span className="resultName">{r.name}</span>
           {r.ok ? <><span>{r.destination === 'photos' ? '已保存' : '已导出'}</span>
             <button className="textButton" onClick={() => perform(() => r.destination === 'photos' ? window.api.openPhotos() : window.api.openPath(r.path))}>{r.destination === 'photos' ? '打开照片' : '查看'}</button></>
-            : <p className="resultErr">{r.error}</p>}
+            : r.cancelled ? <span>已取消</span> : <p className="resultErr">{r.error}</p>}
         </div>)}
       </section>}
 
     </main>
+    {activeFile?.duration > 600 && <p className="importNotice">素材超过 10 分钟，定位可能较慢；成片最多保留 30 秒。</p>}
     {files.length > 0 && <footer className="saveDock" aria-label="保存设置">
       <fieldset className="dockOptions" disabled={running}>
         <button className="soundButton" aria-pressed={!opts.mute} onClick={() => setOpts({ ...opts, mute: !opts.mute })}><Icon name={opts.mute ? 'mute' : 'sound'} size={17} />保留声音</button>
@@ -177,12 +185,13 @@ export default function App() {
       <button className="btnPrimary" disabled={running || !canRun} onClick={openReview}>{preparing ? '正在准备预览…' : running ? '正在保存…' : `预览并${destination === 'photos' ? '保存' : '导出'}${validFiles.length > 1 ? ` ${validFiles.length} 张` : ''}`}</button>
       {!running && results.length > 0 && <div className="saveStatus" role="status">
         {results.some(r => r.ok) && <span>{results.find(r => r.ok).destination === 'photos' ? '已保存' : '已导出'} {results.filter(r => r.ok).length} 张实况照片</span>}
-        {results.some(r => !r.ok) && <span className="resultErr">{results.filter(r => !r.ok).length} 项未完成，请查看详情</span>}
+        {results.some(r=>r.cancelled) && <span>已取消 {results.filter(r=>r.cancelled).length} 项</span>}
+        {results.some(r => !r.ok && !r.cancelled) && <span className="resultErr">{results.filter(r => !r.ok && !r.cancelled).length} 项未完成，请查看详情</span>}
       </div>}
       {running && <div className="saveProgress" aria-live="polite"><span>{done} / {progress?.total || validFiles.length} 已完成</span><div className="progressBar" role="progressbar" aria-label="保存进度" aria-valuenow={done} aria-valuemin={0} aria-valuemax={progress?.total || validFiles.length}><div className="progressFill" style={{ width: `${100 * done / (progress?.total || validFiles.length)}%` }} /></div></div>}
     </footer>}
     {review && <DeliveryPreview review={review} initialIndex={Math.max(0, validFiles.findIndex(f => f.path === activeFile?.path))}
-      saving={running} progress={progress} onClose={closeReview} onSave={confirmSave} />}
+      saving={running} progress={progress} onClose={closeReview} onSave={confirmSave} onStop={() => window.api.cancelDelivery(review.batch.id).catch(e=>setError(e.message))} />}
     {dragging && <div className="dropOverlay"><div>松开，添加视频</div></div>}
   </div>;
 }

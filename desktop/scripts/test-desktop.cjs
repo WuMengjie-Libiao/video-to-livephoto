@@ -37,11 +37,12 @@ app.whenReady().then(async () => {
       await run(`window.api.releaseDelivery(${JSON.stringify(batch.id)})`);
       assert.equal(await run(`window.api.saveDelivery(${JSON.stringify(batch.id)}).then(() => false, () => true)`), true);
     } finally { clearInterval(timer); }
-    assert.equal(result[0].ok, true);
+    assert.equal(result[0].ok, true, JSON.stringify(result[0]));
     assert.equal(result[0].name, files[0].name);
     assert.ok(ticks > 0, '主进程应在转换期间继续处理事件');
     const progress = await run('window.probeProgress');
-    assert.equal(progress[0].phase, 'start');
+    assert.ok(progress.some(p => p.phase === 'encoding'));
+    assert.ok(progress.some(p => p.phase === 'start'));
     assert.equal(progress.at(-1).phase, 'done');
     const other = path.join(dir, 'other.avi');
     execFileSync(core.need('ffmpeg'), ['-v','error','-i',source,'-c:v','mpeg4',other]);
@@ -111,7 +112,7 @@ app.whenReady().then(async () => {
       await new Promise(resolve => setTimeout(resolve, 30));
     }
     assert.equal(await run('document.querySelector("video").readyState >= 2'), true, 'AVI 应生成可播放预览');
-    assert.ok((await run('document.querySelector("video").currentSrc')).includes('?preview=1'));
+    assert.ok((await run('document.querySelector("video").currentSrc')).startsWith('livephoto-media://video/'));
     assert.equal(await readSlider('片段起点'), 0);
     assert.equal(await readSlider('片段终点'), 3);
     await run(`document.querySelector('[aria-label="编辑 clip.mp4"]').click()`);
@@ -174,11 +175,11 @@ app.whenReady().then(async () => {
     assert.ok(text.includes('已导出'));
     assert.ok(fs.existsSync(path.join(dir, 'clip (2).MP.JPG')));
     const output = path.join(dir, 'clip (2).MP.JPG');
-    const structure = core.verifyMotionPhoto(output);
+    const structure = await core.verifyMotionPhoto(output);
     const embedded = path.join(dir, 'selection.mp4');
     fs.writeFileSync(embedded, fs.readFileSync(output).subarray(structure.stillLen));
-    assert.ok(Math.abs(core.videoInfo(embedded).duration - 1.4) < 0.08, '导出时长应与拖出的范围相符');
-    assert.equal(core.videoInfo(embedded).width, core.videoInfo(embedded).height, '导出画面应与预览比例一致');
+    assert.ok(Math.abs((await core.videoInfo(embedded)).duration - 1.4) < 0.08, '导出时长应与拖出的范围相符');
+    assert.equal((await core.videoInfo(embedded)).width, (await core.videoInfo(embedded)).height, '导出画面应与预览比例一致');
     assert.ok(!text.includes('静图模板'));
     assert.equal(await run('document.querySelector(".thumb img")?.naturalWidth > 0'), true, '素材缩略图必须实际解码显示');
     win.setSize(900, 640);
@@ -244,6 +245,35 @@ app.whenReady().then(async () => {
     await run(`document.querySelector('dialog').scrollTop = 0`);
     fs.writeFileSync(path.join(os.tmpdir(), 'photolive-mobile-preview.png'), (await win.webContents.capturePage()).toPNG());
     await run(`document.querySelector('[aria-label="关闭成片预览"]').click()`);
+    await run(`window.stopUIListener=window.api.onProgress(p=>{if(p.phase==='start' && p.index===0)document.querySelector('.stopSaving')?.click();});true`);
+    await run(`document.querySelector('.saveDock .btnPrimary').click()`);
+    await waitReview(1);
+    await run(`document.querySelector('.confirmSave').click()`);
+    for(let i=0;i<100;i++){if(await run(`document.querySelector('.saveStatus')?.textContent.includes('已取消')`))break;await new Promise(r=>setTimeout(r,30));}
+    assert.ok(await run(`document.querySelector('.saveStatus')?.textContent.includes('已取消')`),'取消项应以取消而非空白或失败呈现');
+    await run('window.stopUIListener();true');
+    const stopBatch=await run(`window.api.prepareDelivery(${JSON.stringify({files:[files[0],files[0],files[0]],opts:{},destination:'file',outdir:dir})})`);
+    await run(`window.stopListener=window.api.onProgress(p=>{if(p.phase==='start' && p.index===0)window.api.cancelDelivery(${JSON.stringify(stopBatch.id)});});true`);
+    const stopped=await run(`window.api.saveDelivery(${JSON.stringify(stopBatch.id)})`);
+    await run(`window.stopListener();window.api.releaseDelivery(${JSON.stringify(stopBatch.id)})`);
+    assert.equal(stopped[0].ok,true);assert.ok(stopped.slice(1).every(item=>item.cancelled),'停止后续保存保留当前已提交结果');
+    const probeID=require('node:crypto').randomUUID();
+    await run(`window.cancelledProbe=window.api.probeVideos(${JSON.stringify(Array(20).fill(source))},${JSON.stringify(probeID)}).then(()=>false,()=>true);true`);
+    await run(`window.api.cancelDelivery(${JSON.stringify(probeID)})`);
+    assert.equal(await run('window.cancelledProbe'),true);
+    const longSource = path.join(dir,'long.avi');
+    execFileSync(core.need('ffmpeg'),['-v','error','-f','lavfi','-i','testsrc2=size=320x240:rate=30:duration=100','-c:v','mpeg4',longSource]);
+    const longFile = (await run(`window.api.probeVideos(${JSON.stringify([longSource])})`))[0];
+    const proxy = await run(`window.api.preparePreview(${JSON.stringify(longFile.previewUrl)},{start:60,end:90,width:320,height:240})`);
+    assert.equal(proxy.offset,59); assert.equal(proxy.end,91);
+    const proxyInfo=await run(`new Promise((resolve,reject)=>{const video=document.createElement('video');video.preload='auto';video.onloadeddata=()=>{resolve({duration:video.duration,width:video.videoWidth,height:video.videoHeight});video.remove();};video.onerror=()=>reject(new Error('局部预览无法播放'));video.src=${JSON.stringify(proxy.url)};document.body.append(video);})`);
+    assert.ok(Math.abs(proxyInfo.duration-32)<0.05,'长源仅转换32秒窗口');
+    assert.equal(proxyInfo.width,320);
+    const job={taskId:require('node:crypto').randomUUID(),files:[{...longFile,clip:{start:60,end:90,cover:75}}],opts:{},destination:'file',outdir:dir};
+    await run(`window.cancelledTask=window.api.prepareDelivery(${JSON.stringify(job)}).then(()=>false,()=>true); true`);
+    await run(`window.api.cancelDelivery(${JSON.stringify(job.taskId)})`);
+    assert.equal(await run('window.cancelledTask'),true);
+    await run(`window.api.releaseVideo(${JSON.stringify(longFile.previewUrl)})`);
     win.webContents.debugger.detach();
     console.log('DESKTOP_OK: original editor/export, compact portrait/landscape, synthesized Chromium touch trim/vertical scroll, responsive delivery preview');
   } catch (error) { console.error(error); exitCode = 1; }

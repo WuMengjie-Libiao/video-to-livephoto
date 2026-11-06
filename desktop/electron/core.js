@@ -5,7 +5,10 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFileSync } = require('child_process');
+const { pipeline } = require('node:stream/promises');
+const { run } = require('./media-process');
+const limits = require('./media-limits');
+const storage = require('./media-storage');
 const crypto = require('crypto');
 
 const IS_WIN = process.platform === 'win32';
@@ -36,10 +39,8 @@ function searchPaths(name) {
   dirs.push(path.join(__dirname, 'bin', plat, exe));
   dirs.push(path.join(__dirname, '..', 'bin', plat, exe));
   dirs.push(path.join(__dirname, exe), path.join(__dirname, 'bin', exe));
-  // Windows worker 线程的环境变量名区分大小写，系统路径可能叫 Path。
-  const pathKey = IS_WIN ? Object.keys(process.env).find(key => key.toUpperCase() === "PATH") : "PATH";
-  if (process.env[pathKey]) {
-    for (const d of process.env[pathKey].split(path.delimiter)) {
+  if (process.env.PATH) {
+    for (const d of process.env.PATH.split(path.delimiter)) {
       if (d) dirs.push(path.join(d, exe));
     }
   }
@@ -74,52 +75,35 @@ function need(name) {
 
 // ---------------------------------------------------------------- ffmpeg 调用
 
-function ff(args) {
-  return execFileSync(need('ffmpeg'), args, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: 256 * 1024 * 1024,
-    encoding: 'buffer',
-    windowsHide: true,
-  });
+async function ff(args, context = {}) {
+  return run(need('ffmpeg'), args, context);
 }
-
-function probe(file) {
-  const out = execFileSync(need('ffprobe'),
-    ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file],
-    { encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
-  return JSON.parse(out);
-}
-
-function videoInfo(file) {
-  const meta = probe(file);
-  const vs = (meta.streams || []).find((s) => s.codec_type === 'video');
+async function videoInfo(file, context = {}) {
+  await limits.checkInput(file);
+  const { stdout } = await run(need('ffprobe'),
+    ['-v','error','-print_format','json','-show_format','-show_streams',file], { ...context, onProgress:undefined, timeout: 30000 });
+  const meta = JSON.parse(stdout.toString());
+  const vs = (meta.streams || []).find(s => s.codec_type === 'video');
   if (!vs) throw new Error(`${path.basename(file)} 里没有视频流`);
-  let w = Number(vs.width) || 0;
-  let h = Number(vs.height) || 0;
-  let rot = 0;
-  for (const sd of vs.side_data_list || []) {
-    if (sd.rotation) rot = Math.abs(Number(sd.rotation));
-  }
-  if (rot % 180 === 90) [w, h] = [h, w];
-  const dur = Number(meta.format?.duration || vs.duration || 0);
-  return { duration: dur, width: w, height: h };
+  let w = Number(vs.width), h = Number(vs.height);
+  for (const sd of vs.side_data_list || []) if (Math.abs(Number(sd.rotation)) % 180 === 90) [w,h] = [h,w];
+  const duration = Number(meta.format?.duration || vs.duration);
+  if (!Number.isFinite(duration) || duration <= 0 || !(w > 0 && h > 0)) throw new Error('无法确定视频时长或尺寸');
+  const [num,den] = (vs.avg_frame_rate || '0/1').split('/').map(Number);
+  return { duration, width: w, height: h, fps: num / den || 30 };
 }
-
-function extractStill(video, ts, out, height) {
-  const vf = height ? `scale=-2:${height}:flags=lanczos` : 'null';
-  ff(['-y', '-v', 'error', '-ss', ts.toFixed(3), '-i', video, '-frames:v', '1',
-    '-vf', vf, '-pix_fmt', 'yuvj420p', '-q:v', '2', out]);
-  if (!fs.existsSync(out) || fs.statSync(out).size < 1024) throw new Error('抽帧失败（时间点可能超出视频长度）');
+async function extractStill(video, ts, out, height, context = {}) {
+  await ff(['-y','-v','error','-ss',ts.toFixed(3),'-i',video,'-frames:v','1',
+    '-vf',height ? `scale=-2:${height}:flags=lanczos` : 'null','-pix_fmt','yuvj420p','-q:v','2',out], { ...context, onProgress:undefined, timeout: 15000 });
+  if (!fs.existsSync(out) || !fs.statSync(out).size) throw new Error('抽帧失败（时间点可能超出视频长度）');
 }
-
-function encodeVideo({ src, start, duration, out, height, mute, crf, crop }) {
-  const args = ['-y', '-v', 'error', '-ss', start.toFixed(3), '-t', duration.toFixed(3), '-i', src,
-    '-map', '0:v:0', '-map', '0:a:0?'];
-  if (mute) args.push('-an');
-  else args.push('-c:a', 'aac', '-b:a', '128k', '-ac', '2', '-ar', '48000');
-  args.push('-vf', `${crop ? `crop=${crop.width}:${crop.height},` : ''}scale=-2:${height}:flags=lanczos`, '-c:v', 'libx264', '-profile:v', 'high',
-    '-preset', 'medium', '-crf', String(crf), '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-f', 'mp4', out);
-  ff(args);
+async function encodeVideo({ src, start, duration, out, width, height, mute, crf, crop, fps }, context = {}) {
+  const args = ['-y','-v','error','-ss',start.toFixed(3),'-t',duration.toFixed(3),'-i',src,'-map','0:v:0','-map','0:a:0?'];
+  if (mute) args.push('-an'); else args.push('-c:a','aac','-b:a','128k','-ac','2','-ar','48000');
+  args.push('-vf',`${crop ? `crop=${crop.width}:${crop.height},` : ''}scale=${width}:${height}:flags=lanczos,fps=${Math.min(limits.maxFps,fps)}`,
+    '-c:v','libx264','-profile:v','high','-preset','medium','-crf',String(crf),'-pix_fmt','yuv420p','-movflags','+faststart',
+    '-progress','pipe:1','-f','mp4',out);
+  await ff(args, { ...context, duration, onProgress: context.onProgress || (() => {}), files: [out], timeout: 300000 });
 }
 
 // ------------------------------------------------- Motion Photo（单文件 JPEG）
@@ -176,30 +160,34 @@ function insertApp1(jpeg, xml) {
   return Buffer.concat([jpeg.subarray(0, off), seg, payload, jpeg.subarray(off)]);
 }
 
-function buildMotionPhoto({ stillFile, videoFile, outFile, tsUs }) {
-  const jpeg0 = fs.readFileSync(stillFile);
-  const video = fs.readFileSync(videoFile);
-  const composed = insertApp1(jpeg0, xmpPacket({ tsUs, videoLen: video.length }));
-  fs.writeFileSync(outFile, Buffer.concat([composed, video]));
+async function buildMotionPhoto({ stillFile, videoFile, outFile, tsUs }, context = {}) {
+  await limits.checkOutput([stillFile, videoFile]);
+  const jpeg = await fs.promises.readFile(stillFile);
+  const videoLen = (await fs.promises.stat(videoFile)).size;
+  const composed = insertApp1(jpeg, xmpPacket({ tsUs, videoLen }));
+  if (composed.length + videoLen > limits.maxOutputBytes) throw new Error('成片超过 50 MiB，请缩短片段');
+  await fs.promises.writeFile(outFile, composed, { signal: context.signal });
+  await pipeline(fs.createReadStream(videoFile), fs.createWriteStream(outFile, { flags: 'a' }), { signal: context.signal });
 }
-
-function verifyMotionPhoto(file) {
-  const data = fs.readFileSync(file);
-  const i = data.indexOf('GCamera:MotionPhotoVersion');
-  if (i < 0) return { ok: false, reason: '没有找到 XMP MotionPhoto 标记' };
-  const start = data.lastIndexOf('<x:xmpmeta', i);
-  const end = data.indexOf('</x:xmpmeta>', i);
-  if (start < 0 || end < 0 || data.indexOf(XMP_NS) < 0) return { ok: false, reason: 'XMP 段不完整' };
-  const xml = data.subarray(start, end).toString('utf8');
-  const primary = xml.match(/Semantic="Primary"\s+Item:Length="(\d+)"/);
-  const video = xml.match(/Mime="video\/mp4"[\s\S]*?Item:Length="(\d+)"/);
-  const videoLen = video ? Number(video[1]) : -1;
-  const total = data.length;
-  const stillLen = total - videoLen;
-  const ok = primary?.[1] === '0' && videoLen > 8 && stillLen > 4 &&
-    data.readUInt16BE(0) === 0xffd8 && data.readUInt16BE(stillLen - 2) === 0xffd9 &&
-    data.toString('ascii', stillLen + 4, stillLen + 8) === 'ftyp';
-  return { ok, total, stillLen, videoLen };
+async function verifyMotionPhoto(file) {
+  const handle = await fs.promises.open(file, 'r');
+  try {
+    const total = (await handle.stat()).size;
+    const data = Buffer.alloc(Math.min(total, 65536 + 1024));
+    await handle.read(data,0,data.length,0);
+    const i = data.indexOf('GCamera:MotionPhotoVersion');
+    const start = data.lastIndexOf('<x:xmpmeta', i), end = data.indexOf('</x:xmpmeta>', i);
+    if (i < 0 || start < 0 || end < 0 || data.indexOf(XMP_NS) < 0) return { ok: false, reason: 'XMP 段不完整' };
+    const xml = data.subarray(start,end).toString('utf8');
+    const primary = xml.match(/Semantic="Primary"\s+Item:Length="(\d+)"/);
+    const video = xml.match(/Mime="video\/mp4"[\s\S]*?Item:Length="(\d+)"/);
+    const videoLen = video ? Number(video[1]) : -1, stillLen = total - videoLen;
+    if (!(videoLen > 8 && stillLen > 4)) return { ok:false, reason:'视频边界不合法' };
+    const boundary = Buffer.alloc(10); await handle.read(boundary,0,10,stillLen-2);
+    const ok = total <= limits.maxOutputBytes && primary?.[1] === '0' && data.readUInt16BE(0) === 0xffd8 &&
+      boundary.readUInt16BE(0) === 0xffd9 && boundary.toString('ascii',6,10) === 'ftyp';
+    return { ok,total,stillLen,videoLen };
+  } finally { await handle.close(); }
 }
 
 // ---------------------------------------------------------------- 交付
@@ -212,6 +200,8 @@ function clipRange(total, opts = {}) {
   }
   if (!Number.isFinite(requested) || requested <= 0) throw new Error('片段时长必须大于 0');
   const duration = Math.min(requested, total - start);
+  if (duration > limits.maxDuration) throw new Error('片段最长为 30 秒');
+  if (duration + 1e-9 < Math.min(limits.minDuration, total)) throw new Error('片段至少为 0.1 秒');
   // 靠近结尾的极短片段仍取中间帧，避免请求越过最后一帧。
   if (opts.cover !== undefined && (!Number.isFinite(opts.cover) || opts.cover < start || opts.cover > start + duration)) {
     throw new Error('封面必须位于保留的片段内');
@@ -221,8 +211,8 @@ function clipRange(total, opts = {}) {
   return { start, duration, stillTime };
 }
 
-function renderClip(src, opts, tmp) {
-  const info = videoInfo(src);
+async function renderClip(src, opts, tmp, context) {
+  const info = await videoInfo(src, context);
   const clip = clipRange(info.duration, opts);
   const ratios = { original: null, '1:1': 1, '9:16': 9 / 16, '16:9': 16 / 9, '3:4': 3 / 4 };
   const aspect = opts.aspect ?? 'original';
@@ -235,25 +225,31 @@ function renderClip(src, opts, tmp) {
     if (width < 2 || height < 2) throw new Error('视频画面尺寸太小');
     crop = { width, height };
   }
-  const height = Math.floor(Math.min(1080, crop?.height ?? info.height) / 2) * 2;
+  const size = limits.outputSize(crop?.width ?? info.width, crop?.height ?? info.height);
   const still = path.join(tmp, 'still.jpg');
   const video = path.join(tmp, 'clip.mp4');
-  encodeVideo({ src, ...clip, out: video, height, mute: !!opts.mute, crf: 20, crop });
+  await encodeVideo({ src, ...clip, out: video, ...size, fps: info.fps, mute: !!opts.mute, crf: 20, crop }, { ...context, directory: tmp });
   // 从实际编码后的片段抽帧，保证封面与输出的时间轴相同。
-  const actualDuration = videoInfo(video).duration;
+  context?.onProgress?.({ phase: 'validating' });
+  const actual = await videoInfo(video, context);
+  const actualDuration = actual.duration;
+  if (Math.abs(actualDuration - clip.duration) > 1 / actual.fps + 0.002 || actual.width > size.width || actual.height > size.height || actual.fps > limits.maxFps + 0.01) throw new Error('成片规格验证失败');
   const stillTime = Math.max(0, Math.min(clip.stillTime, actualDuration - 0.05));
-  extractStill(video, stillTime, still, 0);
+  await extractStill(video, stillTime, still, 0, context);
+  await limits.checkOutput([still,video]);
   return { still, video, stillTime, duration: actualDuration };
 }
 
-function preparePhoto(src, opts = {}) {
+async function prepareAppleResources(src, opts, context) {
   const native = require('./native');
   native.needNative();
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-photo-'));
+  await limits.checkSpace(os.tmpdir());
+  const directory = fs.mkdtempSync(path.join(storage.root(), 'lp-photo-'));
   try {
-    const { still, video, stillTime, duration } = renderClip(src, opts, directory);
+    const { still, video, stillTime, duration } = await renderClip(src, opts, directory, context);
     const identifier = crypto.randomUUID().toUpperCase();
-    native.runSync(['prepare', still, video, directory, identifier, String(stillTime)]);
+    await native.run(['prepare', still, video, directory, identifier, String(stillTime)], { ...context, directory });
+    await limits.checkOutput([path.join(directory,'photo.JPG'),path.join(directory,'photo.MOV')]);
     return { directory, identifier, validated: true, video, duration, stillTime,
       still: path.join(directory, 'photo.JPG'), movie: path.join(directory, 'photo.MOV') };
   } catch (error) {
@@ -262,20 +258,25 @@ function preparePhoto(src, opts = {}) {
   }
 }
 
-function prepareDelivery(src, opts) {
+async function preparePhoto(src, opts = {}, context = {}) {
+  return prepareDelivery(src,{...opts,destination:'photos'},context);
+}
+
+async function prepareDeliveryResources(src, opts, context) {
   const name = path.basename(src);
   const stem = path.basename(src, path.extname(src));
   if (opts.destination === 'photos') {
-    return { ...preparePhoto(src, opts), destination: 'photos', name, stem, mute: !!opts.mute };
+    return { ...await prepareAppleResources(src, opts, context), destination: 'photos', name, stem, mute: !!opts.mute };
   }
   if (opts.destination !== 'file') throw new Error('请选择保存到照片或导出文件');
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lp-export-'));
+  await limits.checkSpace(os.tmpdir());
+  const directory = fs.mkdtempSync(path.join(storage.root(), 'lp-export-'));
   try {
-    const rendered = renderClip(src, opts, directory);
+    const rendered = await renderClip(src, opts, directory, context);
     const output = path.join(directory, 'output.MP.JPG');
-    buildMotionPhoto({ stillFile: rendered.still, videoFile: rendered.video, outFile: output,
-      tsUs: Math.round(rendered.stillTime * 1e6) });
-    if (!verifyMotionPhoto(output).ok) throw new Error('动态照片文件结构验证失败');
+    await buildMotionPhoto({ stillFile: rendered.still, videoFile: rendered.video, outFile: output,
+      tsUs: Math.round(rendered.stillTime * 1e6) }, context);
+    if (!(await verifyMotionPhoto(output)).ok) throw new Error('动态照片文件结构验证失败');
     return { ...rendered, directory, output, name, stem, destination: 'file', mute: !!opts.mute };
   } catch (error) {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -283,33 +284,47 @@ function prepareDelivery(src, opts) {
   }
 }
 
-function savePrepared(prepared, outdir) {
+async function savePrepared(prepared, outdir) {
   if (prepared.destination === 'photos') {
-    require('./native').runSync(['import', prepared.still, prepared.movie]);
+    await require('./native').run(['import', prepared.still, prepared.movie]);
     return { destination: 'photos', saved: true };
   }
   if (typeof outdir !== 'string' || !outdir) throw new Error('请选择导出位置');
-  fs.mkdirSync(outdir, { recursive: true });
+  await fs.promises.mkdir(outdir, { recursive: true });
+  await limits.checkSpace(outdir, fs.statSync(prepared.output).size);
   for (let index = 1; ; index++) {
     const name = `${prepared.stem}${index === 1 ? '' : ` (${index})`}.MP.JPG`;
     const output = path.join(outdir, name);
+    let handle;
+    try { handle = await fs.promises.open(output,'wx'); }
+    catch (error) { if (error.code === 'EEXIST') continue; throw error; }
     try {
-      fs.copyFileSync(prepared.output, output, fs.constants.COPYFILE_EXCL);
-      return { destination: 'file', path: output, name, size: fs.statSync(output).size };
+      for await (const data of fs.createReadStream(prepared.output)) await handle.writeFile(data);
+      const size = (await handle.stat()).size;
+      await handle.close();
+      return { destination:'file',path:output,name,size };
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+      await handle.close();
+      await fs.promises.rm(output,{force:true});
+      throw error;
     }
   }
 }
 
 // Direct core callers retain a one-step operation; the app uses prepare/confirm.
-function processVideo(src, opts, onLog = () => {}) {
+async function processVideo(src, opts, onLog = () => {}) {
   onLog('正在生成成片');
-  const prepared = prepareDelivery(src, opts);
+  const prepared = await prepareDelivery(src, opts);
   try {
     onLog('正在保存成片');
-    return savePrepared(prepared, opts.outdir);
+    return await savePrepared(prepared, opts.outdir);
   } finally { fs.rmSync(prepared.directory, { recursive: true, force: true }); }
+}
+
+async function prepareDelivery(src, opts, context = {}) {
+  const signal = AbortSignal.any([context.signal || new AbortController().signal, AbortSignal.timeout(300000)]);
+  try { return await prepareDeliveryResources(src,opts,{...context,signal}); }
+  catch (error) { if (signal.reason?.name === 'TimeoutError') throw new Error('生成成片超过 5 分钟，已停止'); throw error; }
 }
 
 module.exports = {

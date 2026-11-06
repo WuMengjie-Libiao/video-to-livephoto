@@ -1,0 +1,49 @@
+{
+  "version": "9.0.2",
+  "repository": "mrkbac/portable-ffmpeg",
+  "tag": "ffmpeg-9.0.2-1",
+  "artifacts": {
+    "win-x64": {
+      "filename": "ffmpeg-9.0.2-windows-amd64.tar.xz",
+      "sha256": "0e9e40b1e0305c84904163de7215b9c879f9a6aa74196045a5060cd1ca093e73",
+      "binary_sha256": {
+        "ffmpeg.exe": "c930b63cb1ee8b7e2eaf9c15161160edd5c9acad34f0303b5855c8eb142a7e8d",
+        "ffprobe.exe": "075848c1bbb8b4e2e0b0ecba06e8ad06c889a8902ed219d6a9f5758c417ca108"
+      },
+      "source_files": [
+        "ffmpeg-9.0.2-btbn-sources-01.zip",
+        "ffmpeg-9.0.2-btbn-sources-02.zip",
+        "ffmpeg-9.0.2-btbn-rust-stdlib-crates.zip",
+        "ffmpeg-9.0.2-btbn-notices.zip",
+        "ffmpeg-9.0.2-btbn-source-lock.json",
+        "ffmpeg-9.0.2-btbn-RESTORE.md"
+      ]
+    },
+    "mac-x64": {
+      "filename": "ffmpeg-9.0.2-osx-amd64.tar.xz",
+      "sha256": "8b28cf14b576fa4485fe50d9f2fbc5d8fdafa14ca4d2adff85a6e52af84f4597",
+      "binary_sha256": {
+        "ffmpeg": "b25689cf2211c0582d317e849912769a1f1c93904fe102c485b5364a425633d1",
+        "ffprobe": "b5df9964b0c2048318fafedcd4e3bbafbc561033cee77de8da1840685d8a9d0d"
+      },
+      "source_files": [
+        "ffmpeg-9.0.2-macos-sources.zip",
+        "ffmpeg-9.0.2-macos-notices.zip",
+        "ffmpeg-9.0.2-macos-source-lock.json"
+      ]
+    },
+    "mac-arm64": {
+      "filename": "ffmpeg-9.0.2-osx-arm64.tar.xz",
+      "sha256": "38436f085276ba1325d82481aaa5d9818645fbfb3e4078c8938c06cdb8160512",
+      "binary_sha256": {
+        "ffmpeg": "2e11c6f90993cdb79fff84d3f90044d28316b310e75b3e030cfc9a54f2c9d384",
+        "ffprobe": "2738aa46a7f9acbc8ab09a6715554c90f7de603171ac403726765685df6a0059"
+      },
+      "source_files": [
+        "ffmpeg-9.0.2-macos-sources.zip",
+        "ffmpeg-9.0.2-macos-notices.zip",
+        "ffmpeg-9.0.2-macos-source-lock.json"
+      ]
+    }
+  }
+}

@@ -55,6 +55,12 @@ struct ContentView: View {
                                     Text(time(clip.start)); Spacer(); Text(time(clip.end))
                                 }.font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                             }
+                            Text("拖动选区移动 · 最长 30 秒").font(.caption).foregroundStyle(.secondary)
+                            if clip.duration > 40 {
+                                Slider(value: Binding(get:{clip.start},set:{model.changeEdge(.selection,value:$0)}),in:0...max(0.001,clip.duration-clip.length))
+                                    .accessibilityLabel("在原视频中移动选段")
+                            }
+                            if clip.duration > 600 { Text("素材超过 10 分钟，定位可能较慢").font(.caption).foregroundStyle(.secondary) }
                             if let notice = model.notice {
                                 Label(notice, systemImage: "checkmark.circle.fill")
                                     .foregroundStyle(.tint).font(.callout).accessibilityIdentifier("savedNotice")
@@ -131,7 +137,9 @@ struct ContentView: View {
                         Color(.systemBackground).opacity(0.94).ignoresSafeArea()
                         VStack(spacing: 20) {
                             ProgressView().controlSize(.large)
-                            Text(model.source == nil ? "正在打开视频…" : "正在准备画面…").font(.headline)
+                            Text(model.phase).font(.headline)
+                            if let fraction = model.fraction { ProgressView(value:fraction).frame(maxWidth:240) }
+                            Button("取消",action:model.cancel).frame(minHeight:44)
                             Text("视频留在手机上，无需上传").font(.callout).foregroundStyle(.secondary)
                         }.padding(24)
                     }.accessibilityIdentifier("workingOverlay")

@@ -19,7 +19,7 @@ import plistlib,sys
 with open(sys.argv[1], 'wb') as f:
     plistlib.dump(dict(CFBundleIdentifier='com.suikii.livephoto.importer', CFBundleExecutable='LivePhoto',
         CFBundleName='LivePhoto', CFBundleDisplayName='实况照片', CFBundlePackageType='APPL',
-        CFBundleVersion='1', CFBundleShortVersionString='1.0', MinimumOSVersion='16.0',
+        CFBundleVersion='1', CFBundleShortVersionString='0.1.0', MinimumOSVersion='16.0',
         CFBundleDevelopmentRegion='zh_CN', CFBundleLocalizations=['zh-Hans','en'],
         LSRequiresIPhoneOS=True, UIDeviceFamily=[1], UILaunchScreen={},
         UISupportedInterfaceOrientations=['UIInterfaceOrientationPortrait','UIInterfaceOrientationLandscapeLeft','UIInterfaceOrientationLandscapeRight'],

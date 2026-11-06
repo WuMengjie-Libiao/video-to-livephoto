@@ -5,7 +5,7 @@ const { Readable } = require('stream');
 
 // Chromium needs explicit byte-range responses to seek a custom-protocol video.
 // Electron 33's net.fetch(file:) returns 200 without range/length headers.
-function mediaResponse(file, range, method = 'GET') {
+function mediaResponse(file, range, method = 'GET', onStream) {
   let size;
   try { size = fs.statSync(file).size; }
   catch (error) {
@@ -28,7 +28,10 @@ function mediaResponse(file, range, method = 'GET') {
     headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
   }
   headers['Content-Length'] = String(Math.max(0, end - start + 1));
-  const body = method === 'HEAD' || size === 0 ? null : Readable.toWeb(fs.createReadStream(file, { start, end }));
+  let body = null;
+  if (method !== 'HEAD' && size > 0) {
+    const stream = fs.createReadStream(file,{start,end}); onStream?.(stream); body = Readable.toWeb(stream);
+  }
   return new Response(body, { status: range ? 206 : 200, headers });
 }
 module.exports = { mediaResponse };

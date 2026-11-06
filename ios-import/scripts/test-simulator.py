@@ -33,6 +33,7 @@ base = ROOT / 'ios-import/build/fixture-base.mp4'
 run(str(ffmpeg), '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=30:duration=4',
     '-f', 'lavfi', '-i', 'sine=frequency=440:duration=4', '-c:v', 'libx264', '-c:a', 'aac', '-shortest', '-y', str(base))
 run(str(ffmpeg), '-v', 'error', '-i', str(base), '-c', 'copy', '-metadata:s:v:0', 'rotate=90', '-y', str(app / 'fixture.mp4'))
+run(str(ffmpeg), '-v','error','-f','lavfi','-i','testsrc2=size=640x360:rate=60:duration=30','-f','lavfi','-i','sine=frequency=440:duration=30','-c:v','libx264','-preset','ultrafast','-c:a','aac','-shortest','-y',str(app/'fixture-long.mp4'))
 run('codesign', '--force', '--sign', '-', str(app))
 # A first install has no running process. A second run replaces only this test app.
 subprocess.run(['xcrun', 'simctl', 'terminate', args.device, BUNDLE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -26,3 +26,16 @@ test('解压时特殊目录名作为路径处理，不执行其中的命令', ()
     assert.equal(fs.readFileSync(path.join(dest, 'input.txt'), 'utf8'), 'archive contents');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+// Both supported archive formats must treat shell punctuation as literal paths.
+test('tar.xz 解压保持特殊路径和文件内容', () => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'livephoto-tar-'));
+  try {
+    fs.writeFileSync(path.join(root,'input.txt'),'pinned tool archive');
+    const special=path.join(root,"folder';throw 'injected");fs.mkdirSync(special);
+    const archive=path.join(special,'sample.tar.xz');
+    execFileSync('tar',['-cJf',archive,'-C',root,'input.txt']);
+    extractArchive(archive,path.join(special,'out'));
+    assert.equal(fs.readFileSync(path.join(special,'out/input.txt'),'utf8'),'pinned tool archive');
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});

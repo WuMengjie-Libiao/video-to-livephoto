@@ -7,7 +7,7 @@ iOS 16 及以上，直接在手机上把视频变成实况照片，无需先在�
 3. 底部「原比例」默认保留视频方向和比例；可选择 1:1、9:16、16:9 或 3:4，画面将居中裁切，编辑画面会同步显示构图。按需关闭声音，点「预览」。这里播放的是已经生成、经过系统识别的实况照片，可以点击播放或长按画面。
 4. 不满意就「返回调整」。满意后点「确认保存到照片」，首次保存才请求添加照片权限。
 
-处理全程在本地。确认保存使用预览时生成的同一组资源，不再次编码；返回或关闭预览会释放临时文件。一次处理一段视频，换视频会重新选择片段。
+处理全程在本地。确认保存使用预览时生成的同一组资源，不再次编码；返回或关闭预览会释放临时文件。一次处理一段视频，换视频会重新选择片段。默认 3 秒、最长 30 秒，支持整体移动选区及长素材定位；导入最多 1 GiB，成片最多 50 MiB，输出最多 1080p/30fps。复制与生成可取消，剩余空间不足会明确报错。
 
 ## 本机开发与安装
 
@@ -29,7 +29,7 @@ open LivePhotoImporter.xcodeproj
 选段不变量（不需要模拟器）：
 
 ```bash
-xcrun swiftc Sources/ClipSelection.swift Tests/SelectionCheck.swift -o /tmp/photolive-selection-check
+xcrun swiftc Sources/MediaLimits.swift Sources/ClipSelection.swift Tests/SelectionCheck.swift -o /tmp/photolive-selection-check
 /tmp/photolive-selection-check
 ```
 

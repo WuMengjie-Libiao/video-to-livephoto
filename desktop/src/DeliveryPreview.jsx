@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Icon from './Icon.jsx';
 
-export default function DeliveryPreview({ review, initialIndex, saving, progress, onClose, onSave }) {
+export default function DeliveryPreview({ review, initialIndex, saving, progress, onClose, onSave, onStop }) {
   const dialogRef = useRef(null);
   const videoRef = useRef(null);
   const [index, setIndex] = useState(initialIndex);
@@ -9,6 +9,7 @@ export default function DeliveryPreview({ review, initialIndex, saving, progress
   const [videoReady, setVideoReady] = useState(false);
   const [imageReady, setImageReady] = useState(false);
   const [error, setError] = useState('');
+  const [stopping,setStopping] = useState(false);
   const batch = review.batch;
   const item = batch?.items[index];
   const successful = batch?.items.filter(i => i.ok).length || 0;
@@ -40,7 +41,7 @@ export default function DeliveryPreview({ review, initialIndex, saving, progress
   return <dialog ref={dialogRef} className="deliveryDialog" aria-labelledby="deliveryTitle"
     onCancel={event => { event.preventDefault(); if (!saving) onClose(); }}>
     <div className="deliveryHeading"><h2 id="deliveryTitle">预览效果</h2><button className="iconBtn" aria-label="关闭成片预览" disabled={saving} onClick={onClose}><Icon name="close" /></button></div>
-    {review.status === 'loading' ? <div className="deliveryLoading" role="status"><Icon name="live" size={38} /><p>正在准备成片…</p><span>生成后就能查看实际效果</span></div>
+    {review.status === 'loading' ? <div className="deliveryLoading" role="status"><Icon name="live" size={38} /><p>正在准备成片…</p><span>{({encoding:'正在编码',validating:'正在验证',preparing:'正在读取素材'})[progress?.phase] || '生成后就能查看实际效果'}{Number.isFinite(progress?.fraction) ? ` ${Math.round(progress.fraction*100)}%` : ''}</span></div>
       : review.status === 'error' ? <div className="deliveryFailure" role="alert"><p>预览没有生成成功</p><details className="deliveryError"><summary>查看原因</summary><p className="resultErr">{review.error}</p></details></div>
       : <>
         <button className="deliveryCanvas" disabled={!item?.ok || !videoReady || saving} onClick={play}
@@ -67,6 +68,7 @@ export default function DeliveryPreview({ review, initialIndex, saving, progress
       </>}
     <div className="deliveryActions"><button className="textButton" disabled={saving} onClick={onClose}>返回调整</button>
       {review.status === 'ready' && <button className="btnPrimary confirmSave" disabled={!canSave} onClick={onSave}>{saving ? '正在保存…' : `确认${action}${successful > 1 ? ` ${successful} 张` : ''}`}</button>}
+      {saving && batch.items.length > 1 && <button className="textButton stopSaving" disabled={stopping} onClick={()=>{setStopping(true);onStop();}}>{stopping ? '等待当前保存结束…' : '停止后续保存'}</button>}
     </div>
     {saving && <p role="status" className="deliveryHint">{done} / {batch.items.length} 已完成</p>}
   </dialog>;
