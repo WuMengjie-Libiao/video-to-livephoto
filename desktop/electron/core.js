@@ -36,8 +36,10 @@ function searchPaths(name) {
   dirs.push(path.join(__dirname, 'bin', plat, exe));
   dirs.push(path.join(__dirname, '..', 'bin', plat, exe));
   dirs.push(path.join(__dirname, exe), path.join(__dirname, 'bin', exe));
-  if (process.env.PATH) {
-    for (const d of process.env.PATH.split(path.delimiter)) {
+  // Windows worker 线程的环境变量名区分大小写，系统路径可能叫 Path。
+  const pathKey = IS_WIN ? Object.keys(process.env).find(key => key.toUpperCase() === "PATH") : "PATH";
+  if (process.env[pathKey]) {
+    for (const d of process.env[pathKey].split(path.delimiter)) {
       if (d) dirs.push(path.join(d, exe));
     }
   }

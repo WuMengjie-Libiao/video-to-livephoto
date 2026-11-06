@@ -8,6 +8,20 @@ const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const core = require('../electron/core');
 
+test("Windows 后台线程通过 Path 查找 ffprobe", { skip: process.platform !== "win32" }, async () => {
+  const { Worker } = require("node:worker_threads");
+  const expected = core.need("ffprobe");
+  const worker = new Worker(`(${function () {
+    const { parentPort, workerData } = require("node:worker_threads");
+    parentPort.postMessage(require(workerData).need("ffprobe"));
+  }})()`, { eval: true, workerData: require.resolve("../electron/core"), env: { Path: path.dirname(expected) } });
+  const found = await new Promise((resolve, reject) => {
+    worker.once("message", resolve);
+    worker.once("error", reject);
+  });
+  assert.equal(found, expected);
+});
+
 test('截取范围必须落在素材内，短于请求的素材使用实际余长', () => {
   assert.deepEqual(core.clipRange(2, { start: 1.8, duration: 3, stillAt: 'end' }), { start: 1.8, duration: 2 - 1.8, stillTime: (2 - 1.8) / 2 });
   for (const opts of [{ start: 2 }, { start: 5 }, { start: -1 }, { duration: -1 }, { start: Infinity }, { duration: 'bad' }]) {
