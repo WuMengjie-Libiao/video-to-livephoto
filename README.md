@@ -4,7 +4,7 @@
 
 ## 下载
 
-安装包见 [GitHub Releases](https://github.com/WuMengjie-Libiao/video-to-livephoto/releases)。Windows 版内置视频处理组件；Android 版支持 Android 10 及以上。不同品牌相册对动态照片的支持需要实际验证。
+安装包见 [GitHub Releases](https://github.com/WuMengjie-Libiao/video-to-livephoto/releases)。Windows 和 Apple 芯片 Mac 版内置视频处理组件；Mac 版未经 Apple 公证。Android 版支持 Android 10 及以上，不同品牌相册对动态照片的支持需要实际验证。iPhone 提供未签名安装包，需自行签名后安装。
 
 ## 使用方式
 
