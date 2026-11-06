@@ -1,0 +1,10 @@
+# 统一换行，避免 Windows/macOS 混用产生噪音 diff
+* text=auto eol=lf
+
+*.exe binary
+*.dmg binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary

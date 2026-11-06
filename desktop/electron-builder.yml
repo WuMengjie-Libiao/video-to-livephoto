@@ -1,0 +1,46 @@
+appId: com.suikii.livephoto
+productName: LivePhoto
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**
+  - electron/**
+  - package.json
+extraResources:
+  # 把 ffmpeg.exe / ffprobe.exe 放进 desktop/bin/ 就会被一起打包
+  - from: bin
+    to: bin
+    filter:
+      - '**/*'
+win:
+  icon: build/icon.ico
+  target:
+    - target: portable
+      arch: [x64]
+    - target: nsis
+      arch: [x64]
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+nsis:
+  artifactName: ${productName}-Setup-${version}.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+mac:
+  minimumSystemVersion: "12.0"
+  extraResources:
+    - from: native/bin
+      to: native/bin
+  extendInfo:
+    NSPhotoLibraryAddUsageDescription: 将转换后的实况照片保存到你的照片图库。
+  target:
+    - dmg
+    - zip
+  category: public.app-category.photography
+  artifactName: ${productName}-${version}-${arch}.${ext}
+dmg:
+  title: LivePhoto ${version}
+linux:
+  target: AppImage
+  category: Graphics

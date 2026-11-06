@@ -1,0 +1,18 @@
+# 精简版：不内置 ffmpeg，靠系统里已装的（体积约 71MB）
+# 用法：npm run build:slim
+appId: com.suikii.livephoto
+productName: LivePhoto
+directories:
+  output: release-slim
+  buildResources: build
+files:
+  - dist/**
+  - electron/**
+  - package.json
+win:
+  icon: build/icon.ico
+  target:
+    - target: portable
+      arch: [x64]
+portable:
+  artifactName: ${productName}-${version}-portable-slim.${ext}

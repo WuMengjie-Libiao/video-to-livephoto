@@ -1,0 +1,47 @@
+# 测试素材与产物
+test.mp4
+out/
+out-test/
+*.MP.JPG
+
+# Python（遗留参考实现）
+__pycache__/
+*.py[cod]
+.venv/
+
+# Node / Electron
+node_modules/
+desktop/dist/
+desktop/release/
+desktop/release-slim/
+desktop/out-test/
+desktop/.cache/
+*.log
+
+# 随包分发的 ffmpeg（用 npm run fetch:ffmpeg 拉取，不进仓库）
+desktop/bin/*
+!desktop/bin/README.txt
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 编辑器
+.vscode/
+.idea/
+
+# 本地资料（调研、草稿，不进仓库）
+.local/
+
+# 开发过程中的界面截图
+.shots/
+.cache/
+
+# 本机构建的照片桥接程序
+desktop/native/bin/
+ios-import/build/
+ios-import/*.xcodeproj/
+ios-import/Sources/Info.plist
+ios-import/Payload/
+ios-import/*.ipa

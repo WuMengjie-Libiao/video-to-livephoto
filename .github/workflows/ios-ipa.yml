@@ -1,0 +1,66 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ios-import/**'
+      - 'shared/**'
+      - '.github/workflows/ios-ipa.yml'
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios-import
+        run: |
+          xcodegen generate
+          grep -m1 objectVersion LivePhotoImporter.xcodeproj/project.pbxproj
+
+      - name: Build unsigned app
+        working-directory: ios-import
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project LivePhotoImporter.xcodeproj \
+            -scheme LivePhotoImporter \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            -quiet \
+            build
+
+      - name: Package unsigned IPA
+        working-directory: ios-import
+        run: |
+          APP=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
+          if [ -z "$APP" ]; then echo "没找到 .app"; exit 1; fi
+          echo "app = $APP"
+          rm -rf Payload && mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry LivePhotoImporter-unsigned.ipa Payload
+          ls -lh LivePhotoImporter-unsigned.ipa
+          echo "bundle id: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "Payload/$(basename "$APP")/Info.plist")"
+          echo "min iOS:   $(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "Payload/$(basename "$APP")/Info.plist")"
+          echo "archs:     $(lipo -archs "Payload/$(basename "$APP")/$(basename "$APP" .app)")"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LivePhotoImporter-ipa
+          path: ios-import/LivePhotoImporter-unsigned.ipa
+          if-no-files-found: error

@@ -1,0 +1,8 @@
+# 生成物（由 CI 或本地 xcodegen 产出）
+LivePhotoImporter.xcodeproj/
+Sources/Info.plist
+build/
+Payload/
+*.ipa
+*.xcworkspace/
+.DS_Store
