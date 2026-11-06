@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { createHash } from 'node:crypto';
+import { extractArchive } from './extract-archive.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const platTag = process.platform === 'win32' ? 'win'
@@ -21,17 +22,6 @@ async function download(url, out) {
   const buf = Buffer.from(await res.arrayBuffer());
   fs.writeFileSync(out, buf);
   console.log(`   ${(buf.length / 1048576).toFixed(1)} MB`);
-}
-
-function unzip(zip, outDir) {
-  fs.rmSync(outDir, { recursive: true, force: true });
-  fs.mkdirSync(outDir, { recursive: true });
-  if (process.platform === 'win32') {
-    execFileSync('powershell', ['-NoProfile', '-Command',
-      `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${outDir}' -Force`], { stdio: 'inherit' });
-  } else {
-    execFileSync('unzip', ['-q', '-o', zip, '-d', outDir], { stdio: 'inherit' });
-  }
 }
 
 function findFile(dir, name) {
@@ -56,7 +46,7 @@ async function fetchWindows() {
   const zip = path.join(cache, 'ffmpeg-win64.zip');
   await download(asset.browser_download_url, zip);
   const tmp = path.join(cache, 'ffmpeg-win64');
-  unzip(zip, tmp);
+  extractArchive(zip, tmp);
   const binDir = path.dirname(findFile(tmp, 'ffmpeg.exe'));
   fs.mkdirSync(dest, { recursive: true });
   for (const f of fs.readdirSync(binDir)) {
@@ -83,7 +73,7 @@ async function fetchMac() {
     const zip = path.join(cache, `${name}.zip`);
     await download(url, zip);
     const tmp = path.join(cache, `${name}-x`);
-    unzip(zip, tmp);
+    extractArchive(zip, tmp);
     const bin = findFile(tmp, name);
     if (!bin) throw new Error(`${name} 解压后没找到可执行文件`);
     if (hash && createHash('sha256').update(fs.readFileSync(bin)).digest('hex') !== hash) {

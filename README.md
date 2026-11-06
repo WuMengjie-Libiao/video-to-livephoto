@@ -14,7 +14,7 @@
 
 ## 本机运行
 
-需要 Node.js 20.11 或更高版本。开发 Mac 原生组件需要 Xcode Command Line Tools；打包后的应用不需要 Xcode 或 Swift。
+需要 Node.js 20.19 或更高版本（Node.js 22 需 22.12 或更高版本）。开发 Mac 原生组件需要 Xcode Command Line Tools；打包后的应用不需要 Xcode 或 Swift。
 
 ```bash
 cd desktop
@@ -59,7 +59,7 @@ npm run test:desktop # 实际 Electron 的素材读取、进度、导出与窗�
 
 测试自动合成含音轨的短片，不依赖未入库视频。覆盖时间范围、源文件保护、重名导出、单文件结构、静音和内嵌视频解码；在 Mac 还生成 Apple 配对资源、检查 MOV 内容标识/元数据轨、要求 `PHLivePhoto` 验证通过并拒绝不匹配资源。自动测试不写入个人照片图库。
 
-用户已验证 macOS 和 iOS 的导出功能可用。iPhone 版本还在隔离模拟器完成系统实况识别和相册写入验证；Android 15 模拟器已验证编辑、预览、保存和生成文件结构，Google 相册可识别并播放测试样本。Windows 自动构建已通过核心测试、桌面界面测试和安装包打包。Android 各品牌图库识别、iCloud 同步、微信/抖音分享结果仍需进一步验证。
+macOS 和 iOS 的导出功能已验证可用。iPhone 版本还在隔离模拟器完成系统实况识别和相册写入验证；Android 15 模拟器已验证编辑、预览、保存和生成文件结构，Google 相册可识别并播放测试样本。Windows 自动构建已通过核心测试、桌面界面测试和安装包打包。Android 各品牌图库识别、iCloud 同步、微信/抖音分享结果仍需进一步验证。
 
 ## 目录
 

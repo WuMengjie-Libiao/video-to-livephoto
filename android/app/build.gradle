@@ -15,6 +15,8 @@ android {
     }
 }
 dependencies {
+    // Media3 transitively brings Guava; select the release fixing GHSA-xxph-c9ww-hj94.
+    implementation 'com.google.guava:guava:33.7.2-android'
     implementation 'androidx.media3:media3-exoplayer:1.7.1'
     implementation 'androidx.media3:media3-ui:1.7.1'
     implementation 'androidx.media3:media3-transformer:1.7.1'
